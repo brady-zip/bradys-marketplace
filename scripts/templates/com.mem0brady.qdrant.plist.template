@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mem0brady.qdrant</string>
+
+    <!-- Native Qdrant server binary (no Docker). Concurrent access for the
+         mem0 MCP server + the SessionStart/Stop hooks. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>__HOME__/.local/share/mem0-brady/bin/qdrant</string>
+    </array>
+
+    <!-- Qdrant config via QDRANT__ env overrides. Isolated ports (6433/6434) so
+         it never collides with a personal Qdrant on 6333/6334. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>__HOME__</string>
+        <key>QDRANT__SERVICE__HTTP_PORT</key>
+        <string>6433</string>
+        <key>QDRANT__SERVICE__GRPC_PORT</key>
+        <string>6434</string>
+        <key>QDRANT__SERVICE__HOST</key>
+        <string>127.0.0.1</string>
+        <key>QDRANT__STORAGE__STORAGE_PATH</key>
+        <string>__HOME__/.local/share/mem0-brady/qdrant-storage</string>
+        <key>QDRANT__STORAGE__SNAPSHOTS_PATH</key>
+        <string>__HOME__/.local/share/mem0-brady/qdrant-storage/snapshots</string>
+        <key>QDRANT__TELEMETRY_DISABLED</key>
+        <string>true</string>
+    </dict>
+
+    <!-- cwd holds qdrant's runtime files; storage paths above are absolute. -->
+    <key>WorkingDirectory</key>
+    <string>__HOME__/.local/share/mem0-brady</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>__HOME__/.local/share/mem0-brady/qdrant.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/.local/share/mem0-brady/qdrant.log</string>
+</dict>
+</plist>

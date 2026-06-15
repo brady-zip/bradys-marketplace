@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mem0brady.server</string>
+
+    <!-- uv-tool-installed console script (OpenAI provider; connects to the
+         local Qdrant server). We source ~/.config/mem0-brady/.env before exec:
+         the server's load_dotenv() uses python-dotenv's default usecwd=False, so
+         it searches from the package file (in the uv-tool venv), NOT this
+         WorkingDirectory — it would never find our .env on its own and would
+         fall back to stdio transport (and exit immediately). Sourcing here puts
+         the key, port, transport, collection, and MEM0_QDRANT_URL into the
+         environment, exactly like the SessionStart/Stop hook wrappers do. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/sh</string>
+        <string>-c</string>
+        <string>set -a; . "__HOME__/.config/mem0-brady/.env"; set +a; exec "__HOME__/.local/bin/mem0-mcp-selfhosted"</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__HOME__/.config/mem0-brady</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>__HOME__/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>__HOME__</string>
+    </dict>
+
+    <!-- Start at login; restart on crash. -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>__HOME__/.local/share/mem0-brady/server.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/.local/share/mem0-brady/server.log</string>
+</dict>
+</plist>
