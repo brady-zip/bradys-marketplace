@@ -3,7 +3,8 @@
 # One-time installer for the mem0-brady plugin. Run via /mem0-brady:setup.
 #
 # Stands up a fully local, no-Docker stack:
-#   - the patched self-hosted Mem0 fork as a uv tool (OpenAI provider)
+#   - the patched self-hosted Mem0 fork as a uv tool (OpenAI LLM; OpenAI or
+#     ZeroEntropy for embeddings + reranking — setup asks which)
 #   - a native Qdrant SERVER binary under launchd (isolated ports 6433/6434)
 #   - the mem0 MCP server under launchd (HTTP on :8788), pointed at that Qdrant
 #
@@ -144,17 +145,24 @@ else
   say "installed qdrant -> ${QDRANT_BIN} ($("$QDRANT_BIN" --version 2>/dev/null | head -1))"
 fi
 
-# --- 4. OpenAI key -----------------------------------------------------------
-step "4/8  OpenAI API key"
-EXISTING_KEY=""
-if [ -f "$ENV_FILE" ]; then
-  EXISTING_KEY="$(grep -E '^OPENAI_API_KEY=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)"
-fi
+# --- 4. API keys + embedding/reranking provider ------------------------------
+step "4/8  API keys + embedding/reranking provider"
+
+# Read a value out of the existing env file (for idempotent re-runs). Prints
+# nothing if the file or key is absent.
+env_val() {
+  [ -f "$ENV_FILE" ] || return 0
+  grep -E "^$1=" "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true
+}
+
+# 4a. OpenAI key — Mem0's LLM extracts facts on every provider, so this is
+# always required (reused for the embedder too when the provider is openai).
+EXISTING_KEY="$(env_val OPENAI_API_KEY)"
 if [ -n "$EXISTING_KEY" ] && [ "$EXISTING_KEY" != "__OPENAI_API_KEY__" ]; then
-  say "reusing existing key from ${ENV_FILE}"
+  say "reusing existing OpenAI key from ${ENV_FILE}"
   OPENAI_KEY="$EXISTING_KEY"
 else
-  printf "  Enter your OpenAI API key (input hidden): "
+  printf "  Enter your OpenAI API key (LLM fact extraction; input hidden): "
   read -rs OPENAI_KEY
   printf "\n"
   [ -n "$OPENAI_KEY" ] || die "no key entered"
@@ -164,13 +172,73 @@ else
   esac
 fi
 
+# 4b. Embedding + reranking provider. Reuse the prior choice on re-runs;
+# otherwise prompt (default: openai).
+EXISTING_PROVIDER="$(env_val MEM0_EMBED_PROVIDER)"
+case "$EXISTING_PROVIDER" in
+  openai|zeroentropy)
+    PROVIDER="$EXISTING_PROVIDER"
+    say "reusing embedding/reranking provider from ${ENV_FILE}: ${PROVIDER}"
+    ;;
+  *)
+    printf "  Embedding + reranking provider? [openai/zeroentropy] (default openai): "
+    read -r PROVIDER || true
+    PROVIDER="$(printf '%s' "${PROVIDER:-openai}" | tr '[:upper:]' '[:lower:]')"
+    ;;
+esac
+
+ZE_KEY=""
+case "$PROVIDER" in
+  openai)
+    EMBED_PROVIDER="openai"
+    EMBED_MODEL="text-embedding-3-small"
+    EMBED_DIMS="1536"
+    RERANK_PROVIDER=""
+    RERANK_MODEL=""
+    say "embeddings: OpenAI text-embedding-3-small (1536d); reranking: off"
+    ;;
+  zeroentropy)
+    EMBED_PROVIDER="zeroentropy"
+    EMBED_MODEL="zembed-1"
+    EMBED_DIMS="2560"
+    RERANK_PROVIDER="zero_entropy"
+    RERANK_MODEL="zerank-1"
+    EXISTING_ZE="$(env_val ZEROENTROPY_API_KEY)"
+    if [ -n "$EXISTING_ZE" ] && [ "$EXISTING_ZE" != "__ZEROENTROPY_API_KEY__" ]; then
+      say "reusing existing ZeroEntropy key from ${ENV_FILE}"
+      ZE_KEY="$EXISTING_ZE"
+    else
+      printf "  Enter your ZeroEntropy API key (input hidden): "
+      read -rs ZE_KEY
+      printf "\n"
+      [ -n "$ZE_KEY" ] || die "no ZeroEntropy key entered"
+      say "ZeroEntropy key captured"
+    fi
+    say "embeddings: ZeroEntropy zembed-1 (2560d); reranking: zerank-1"
+    ;;
+  *)
+    die "unknown provider '${PROVIDER}' (expected: openai or zeroentropy)"
+    ;;
+esac
+
 # --- 5. Create dirs + render config -----------------------------------------
 step "5/8  Config + data dirs"
 mkdir -p "$CONFIG_DIR" "$QDRANT_STORAGE" "$LA_DIR"
-KEY="$OPENAI_KEY" awk '{ gsub(/__OPENAI_API_KEY__/, ENVIRON["KEY"]); print }' \
-  "${TEMPLATES}/env.template" > "$ENV_FILE"
+KEY="$OPENAI_KEY" ZE_KEY="$ZE_KEY" \
+  EMBED_PROVIDER="$EMBED_PROVIDER" EMBED_MODEL="$EMBED_MODEL" EMBED_DIMS="$EMBED_DIMS" \
+  RERANK_PROVIDER="$RERANK_PROVIDER" RERANK_MODEL="$RERANK_MODEL" \
+  awk '{
+    gsub(/__OPENAI_API_KEY__/, ENVIRON["KEY"]);
+    gsub(/__ZEROENTROPY_API_KEY__/, ENVIRON["ZE_KEY"]);
+    gsub(/__EMBED_PROVIDER__/, ENVIRON["EMBED_PROVIDER"]);
+    gsub(/__EMBED_MODEL__/, ENVIRON["EMBED_MODEL"]);
+    gsub(/__EMBED_DIMS__/, ENVIRON["EMBED_DIMS"]);
+    gsub(/__RERANK_PROVIDER__/, ENVIRON["RERANK_PROVIDER"]);
+    gsub(/__RERANK_MODEL__/, ENVIRON["RERANK_MODEL"]);
+    print
+  }' "${TEMPLATES}/env.template" > "$ENV_FILE"
 chmod 600 "$ENV_FILE"
-say "wrote ${ENV_FILE} (chmod 600)"
+say "wrote ${ENV_FILE} (chmod 600, provider: ${PROVIDER})"
 say "qdrant storage: ${QDRANT_STORAGE}"
 
 # --- 6. Install + load the Qdrant launchd agent -----------------------------
@@ -194,6 +262,8 @@ wait_for "$MCP_URL" "MCP server" 30
 
 printf "\n${GREEN}${BOLD}mem0-brady is set up.${NC}\n"
 printf "  • Config:        %s\n" "$ENV_FILE"
+printf "  • Embeddings:    %s (%s, %sd)\n" "$EMBED_PROVIDER" "$EMBED_MODEL" "$EMBED_DIMS"
+printf "  • Reranking:     %s\n" "${RERANK_MODEL:-off}"
 printf "  • Qdrant:        %s (native, no Docker)\n" "$QDRANT_URL"
 printf "  • Memory store:  %s (local, per-machine)\n" "$QDRANT_STORAGE"
 printf "  • Logs:          %s/{qdrant,server}.log\n" "$DATA_DIR"
