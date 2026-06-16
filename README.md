@@ -97,12 +97,48 @@ Verify any time with:
 /mem0-brady:doctor
 ```
 
+## Embedding & reranking provider
+
+Setup asks which provider should do **embeddings + reranking**:
+
+| Provider | Embedder | Reranker | Key |
+|----------|----------|----------|-----|
+| `openai` (default) | `text-embedding-3-small` (1536 dims) | none | `OPENAI_API_KEY` |
+| `zeroentropy` | `zembed-1` (2560 dims, Matryoshka) | `zerank-1` | `ZEROENTROPY_API_KEY` |
+
+The **LLM that extracts facts is always OpenAI** (`gpt-4o-mini`) — ZeroEntropy doesn't offer an
+LLM — so an `OPENAI_API_KEY` is required either way. Picking `zeroentropy` swaps the embedder to
+[ZeroEntropy's](https://zeroentropy.dev) `zembed-1` and adds a `zerank-1` reranking pass over
+recall hits before they reach the model; it bills those to your `ZEROENTROPY_API_KEY`.
+
+> ZeroEntropy's key env var is spelled two ways in the wild — the SDK reads `ZEROENTROPY_API_KEY`
+> while Mem0's reranker wrapper reads `ZERO_ENTROPY_API_KEY`. The rendered `.env` sets **both** to
+> the same value so neither path breaks.
+
+This plugin owns the **config contract** (the `MEM0_EMBED_PROVIDER` / `MEM0_RERANK_PROVIDER` /
+`MEM0_RERANK_MODEL` env vars and the keys above). The runtime support lives in the pinned Mem0
+fork: Mem0 ships a first-party `zero_entropy` reranker, and the fork wires `zembed-1` as the
+embedder when `MEM0_EMBED_PROVIDER=zeroentropy`. Make sure the fork ref you install honors these.
+
+A collection's vector size is fixed when it's created, so **switching providers changes
+`MEM0_EMBED_DIMS` and needs a fresh collection**. To switch, stop the agents, wipe the store, and
+re-run setup:
+
+```
+launchctl bootout gui/$(id -u)/com.mem0brady.server
+launchctl bootout gui/$(id -u)/com.mem0brady.qdrant
+rm -rf ~/.local/share/mem0-brady/qdrant-storage
+/mem0-brady:setup
+```
+
 ## Requirements
 
 - **macOS** (the servers run under launchd), Apple Silicon or Intel.
-- An **OpenAI API key** (`sk-...`) in `~/.config/mem0-brady/.env`. It pays for memory extraction
-  (LLM, `gpt-4o-mini`) and embeddings (`text-embedding-3-small`, 1536 dims). Setup reuses an
-  existing key if present; otherwise it prompts.
+- An **OpenAI API key** (`sk-...`) in `~/.config/mem0-brady/.env` — always required for the LLM
+  (`gpt-4o-mini`) that extracts facts, and for embeddings (`text-embedding-3-small`) when the
+  provider is `openai`. Setup reuses an existing key if present; otherwise it prompts.
+- A **ZeroEntropy API key** *only if* you pick the `zeroentropy` provider (embeddings +
+  reranking). Setup prompts for it and reuses it on re-runs.
 - `curl`, `jq`, `tar` (setup checks for these; install with `brew install curl jq`).
 - `uv` — setup installs it automatically if missing.
 - Network access during setup (to download the Mem0 fork and the Qdrant binary). No Docker.
@@ -135,7 +171,7 @@ Run `/mem0-brady:doctor` first — it pinpoints which layer is broken and prints
 |------|------|
 | `~/.local/bin/mem0-mcp-selfhosted` (+ `mem0-hook-*`) | uv-tool console scripts (the patched fork) |
 | `~/.local/share/mem0-brady/bin/qdrant` | native Qdrant server binary (no Docker) |
-| `~/.config/mem0-brady/.env` | config: key, models, MCP port, Qdrant URL, `shared-bch` (chmod 600) |
+| `~/.config/mem0-brady/.env` | config: keys, embedding/reranking provider + models, MCP port, Qdrant URL, `shared-bch` (chmod 600) |
 | `~/.local/share/mem0-brady/qdrant-storage` | Qdrant's on-disk data |
 | `~/Library/LaunchAgents/com.mem0brady.qdrant.plist` | launchd agent running Qdrant (`:6433`) |
 | `~/Library/LaunchAgents/com.mem0brady.server.plist` | launchd agent running the MCP server (`:8788`) |

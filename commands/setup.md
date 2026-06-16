@@ -1,16 +1,19 @@
 ---
-description: One-time setup for mem0-brady — installs the Mem0 fork, captures your OpenAI key, and starts the local MCP server
+description: One-time setup for mem0-brady — installs the Mem0 fork, captures your keys, asks which embedding/reranking provider to use, and starts the local MCP server
 allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/setup.sh)
 ---
 
 Run the mem0-brady installer. It will: install `uv` if missing, `uv tool install` the
-patched self-hosted Mem0 fork, reuse (or prompt for) your OpenAI API key (used for both
-the LLM and embeddings), write `~/.config/mem0-brady/.env`, install the native Qdrant
-server binary, and install + load two launchd agents — a native Qdrant server on
-`127.0.0.1:6433` and the MCP server on `127.0.0.1:8788` pointed at it. No Docker.
+patched self-hosted Mem0 fork, reuse (or prompt for) your OpenAI API key (the LLM that
+extracts facts is always OpenAI), **ask which provider should do embeddings + reranking —
+`openai` (default) or `zeroentropy`** (prompting for a ZeroEntropy key in that case), write
+`~/.config/mem0-brady/.env`, install the native Qdrant server binary, and install + load two
+launchd agents — a native Qdrant server on `127.0.0.1:6433` and the MCP server on
+`127.0.0.1:8788` pointed at it. No Docker.
 
-If no key is already present, the prompt reads from your terminal (hidden input), so a
-first-time run must be interactive.
+If no keys/provider are already present, the prompts read from your terminal (hidden input
+for keys), so a first-time run must be interactive. Re-runs reuse the existing provider and
+keys from `~/.config/mem0-brady/.env`.
 
 Execute:
 

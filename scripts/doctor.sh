@@ -6,7 +6,8 @@
 #   - macOS (launchd)
 #   - uv + the fork's console scripts on PATH
 #   - the native qdrant binary
-#   - the single config file (~/.config/mem0-brady/.env) exists + has a key
+#   - the single config file (~/.config/mem0-brady/.env) exists + has the keys
+#     its embedding/reranking provider needs (OpenAI always; ZeroEntropy too)
 #   - both launchd agents loaded (com.mem0brady.qdrant, com.mem0brady.server)
 #   - the Qdrant server answers on :6433 and the MCP server on :8788
 #   - the Qdrant storage dir is present + writable
@@ -69,7 +70,14 @@ print_header "Config (required)"
 if [ -f "$ENV_FILE" ]; then
   pass "config present at ${ENV_FILE}"
   KEY="$(grep -E '^OPENAI_API_KEY=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)"
-  if [ -n "$KEY" ] && [ "$KEY" != "__OPENAI_API_KEY__" ]; then pass "OPENAI_API_KEY is set"; else fail_required "OPENAI_API_KEY missing/placeholder in ${ENV_FILE}" "Run /mem0-brady:setup."; fi
+  if [ -n "$KEY" ] && [ "$KEY" != "__OPENAI_API_KEY__" ]; then pass "OPENAI_API_KEY is set (LLM fact extraction)"; else fail_required "OPENAI_API_KEY missing/placeholder in ${ENV_FILE}" "Run /mem0-brady:setup."; fi
+  PROVIDER="$(grep -E '^MEM0_EMBED_PROVIDER=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)"
+  if [ "$PROVIDER" = "zeroentropy" ]; then
+    ZE="$(grep -E '^ZEROENTROPY_API_KEY=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)"
+    if [ -n "$ZE" ] && [ "$ZE" != "__ZEROENTROPY_API_KEY__" ]; then pass "ZEROENTROPY_API_KEY is set (embeddings + reranking)"; else fail_required "ZEROENTROPY_API_KEY missing/placeholder in ${ENV_FILE}" "Run /mem0-brady:setup."; fi
+  else
+    pass "embedding/reranking provider: ${PROVIDER:-openai}"
+  fi
   PERMS="$(stat -f '%Lp' "$ENV_FILE" 2>/dev/null || true)"
   [ "$PERMS" = "600" ] && pass "permissions 600" || fail_optional "permissions ${PERMS:-unknown} (expected 600)" "chmod 600 ${ENV_FILE}"
 else
