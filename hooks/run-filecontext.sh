@@ -6,7 +6,7 @@
 # "prior work on this file" list. Recall only — never blocks the Read.
 #
 # Fail-open: a missing env/key/install just skips.
-set -euo pipefail
+set -uo pipefail
 
 ENV_FILE="${MEM0_BRADY_ENV:-$HOME/.config/mem0-brady/.env}"
 if [ -f "$ENV_FILE" ]; then
@@ -25,9 +25,8 @@ esac
 export MEM0_APP_ID="$_mem0_domain"
 export MEM0_RECALL_APP_IDS="$_mem0_domain"
 
-if ! command -v mem0-hook-filecontext >/dev/null 2>&1; then
-  printf '%s\n' '{"continue": true, "suppressOutput": true}'
-  exit 0
-fi
-
-exec mem0-hook-filecontext
+# Capture-tee-replay: run the fork hook, log what it injected (for
+# /mem0-brady:digest), replay its output. Replaces a bare `exec`.
+# shellcheck source=lib-recall-log.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib-recall-log.sh"
+mem0_run_and_log mem0-hook-filecontext filecontext

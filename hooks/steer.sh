@@ -21,6 +21,14 @@ case "$cwd" in
   *) domain=general ;;
 esac
 
+# Stamp the current-session marker so /mem0-brady:digest can tell an ongoing
+# session (scope to it) from a freshly-opened one (scope to the whole day).
+# shellcheck source=lib-recall-log.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib-recall-log.sh"
+mem0_write_session_marker \
+  "$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)" \
+  "$cwd" "$domain"
+
 steer="Memory is active (Mem0, self-hosted). This session's Mem0 DOMAIN is app_id='${domain}' (cwd=${cwd}).
 Mem0 is the SINGLE memory backbone — it does BOTH explicit hard facts AND passive capture/recall. There is no Honcho.
 Memory is one shared store (user_id 'shared-bch', shared with Hal) partitioned by app_id into domains: 'evergreen' (work in the evergreen repo + its worktrees), 'general' (Claude tooling, customizations, memory infra), and 'hal-ops' (Hal's own ops, written by Hal). ALWAYS pass app_id='${domain}' on every ${PREFIX}add_memory this session, and filter every ${PREFIX}search_memories / get_memories with app_id='${domain}' so recall stays in-domain. Only widen to another domain when the user explicitly asks for cross-domain context.

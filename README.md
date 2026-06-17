@@ -14,6 +14,10 @@ Mem0 does **both** kinds of memory here:
 - **`grill-me` skill** — a Mem0-backed plan/design interview ("grill me") that stress-tests a
   design against prior decisions and persists resolved glossary terms + decisions to the store,
   `app_id`-scoped to the session's domain. (Folded in from the former standalone `grill-me` plugin.)
+- **`/mem0-brady:digest`** — proof the layer is earning its keep: summarizes what got captured
+  and, critically, **which recall-hook injections actually shaped the work**. Scopes to the
+  current session when run mid-session, or the whole day when run in a fresh one. See
+  [Digest](#digest-is-the-memory-layer-useful).
 
 (This replaced a Honcho-based passive layer — Mem0 now owns the implicit capture too.)
 
@@ -71,6 +75,35 @@ The MCP server (for the tools) and the hooks (for recall/capture) both read the 
 than an embedded on-disk store) is required because Qdrant's embedded mode takes an **exclusive
 per-process lock** — it can't be shared by the MCP server, the hooks, concurrent Claude sessions,
 and the Hal gateway at once. The server handles concurrent access cleanly.
+
+## Digest: is the memory layer useful?
+
+`/mem0-brady:digest` answers "did memory pull its weight?" by reporting both sides of the
+ledger for a window:
+
+- **Captures** — what got stored (explicit `add_memory` calls from the local op log, plus
+  the Stop-hook session summaries pulled from the store, deduped).
+- **Hook injections** — what the recall hooks (`SessionStart`, `UserPromptSubmit`,
+  `Read` file-context) silently fed into context, with the **critical** ones highlighted:
+  a prior decision, a gotcha, prior art on a file just opened. Routine steering/no-hit
+  recalls are counted but not quoted.
+
+**Scope is automatic.** Run it mid-session and it summarizes just *this* session (events
+since the session marker's `started_at`); run it in a freshly-opened session and it
+summarizes the whole calendar day. Force with `--session` / `--day`, or pass a
+`YYYY-MM-DD`.
+
+This is powered by two append-only logs under `~/.local/share/mem0-brady/logs/`:
+
+| Log | Written by | Holds |
+|-----|-----------|-------|
+| `mem0_ops.log` | `PostToolUse(mcp__mem0__*)` hook | every explicit `add_memory` / `search_memories` call (TSV: ts + `{tool,session_id,input}`) |
+| `mem0_recall.log` | the recall hooks (capture-tee-replay) | every hook injection (JSONL: `{ts,hook,session_id,app_id,chars,content}`) |
+| `current_session.json` | `SessionStart` steer hook | marker for the most-recently-started session, so the digest can scope to it |
+
+The recall hooks run the fork console script, **log what it injected, then replay its
+exact output** — recall behaviour is unchanged, the logging is a fail-open side effect.
+`mem0_recall.log` only starts filling on sessions that begin *after* this is installed.
 
 ## Install
 
