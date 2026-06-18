@@ -47,6 +47,43 @@ mem0_write_session_marker() {
     > "$MEM0_SESSION_MARKER" 2>/dev/null || true
 }
 
+# mem0_handoff_pointer <cwd>
+# Echo a one-line resume pointer if a recent handoff file exists for <cwd>, else
+# nothing. The handoff file is written by the fork's Stop/PreCompact hooks; this
+# only locates it (same path scheme: <project>-<sha1(cwd)[:8]>.md) so the
+# SessionStart steer can tell a fresh session a resume doc is waiting. Fail-open.
+mem0_handoff_pointer() {
+  local cwd="$1"
+  [ -n "$cwd" ] || return 0
+
+  local dir proj safe digest file
+  dir="${MEM0_HANDOFF_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/mem0-brady/handoffs}"
+  proj="$(basename "$cwd")"
+  safe="$(printf '%s' "$proj" | sed -E 's/[^A-Za-z0-9_.-]+/-/g; s/^-+//; s/-+$//')"
+  [ -n "$safe" ] || safe=project
+  digest="$(printf '%s' "$cwd" | shasum -a 1 2>/dev/null | cut -c1-8)"
+  [ -n "$digest" ] || return 0
+  file="$dir/$safe-$digest.md"
+  [ -f "$file" ] || return 0
+
+  local now mtime age max_h max_s human
+  now="$(date +%s 2>/dev/null)" || return 0
+  mtime="$(stat -f %m "$file" 2>/dev/null)" || return 0
+  [ -n "$mtime" ] || return 0
+  age=$(( now - mtime ))
+  max_h="${MEM0_HANDOFF_MAX_AGE_HOURS:-168}"   # default: 7 days
+  max_s=$(( max_h * 3600 ))
+  [ "$age" -le "$max_s" ] || return 0          # too stale to surface
+
+  if   [ "$age" -lt 3600 ];  then human="$(( age / 60 ))m ago"
+  elif [ "$age" -lt 86400 ]; then human="$(( age / 3600 ))h ago"
+  else                            human="$(( age / 86400 ))d ago"
+  fi
+
+  printf 'RESUME AVAILABLE: a handoff for this project was written %s at %s. If the user is resuming prior work ("continue", "where were we", "pick up", etc.), read that file FIRST to recover context instead of reloading the whole history.' \
+    "$human" "$file"
+}
+
 # mem0_run_and_log <console_script> <hook_label>
 # The recall-hook body. Reads the hook payload on stdin, runs the fork console
 # script with it, logs any injected additionalContext, and replays the script's

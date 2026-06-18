@@ -38,5 +38,12 @@ By KIND:
 - WORKING MEMORY on a large/ongoing task -> pass run_id=<repo-or-task> to ${PREFIX}add_memory / search_memories so scratch context stays scoped and out of the long-term pool. (app_id is the coarse domain; run_id is the fine task within it — orthogonal.)
 - Native file-memory (the ~/.claude .../memory/ dir) is RETIRED: writes there are blocked and steered here."
 
+# If a recent resume-handoff file exists for this cwd (written by the fork's
+# Stop/PreCompact hooks), append a pointer so a fresh session can pick up where
+# the last one left off without reloading the whole history. Silent when none.
+resume="$(mem0_handoff_pointer "$cwd" 2>/dev/null || true)"
+[ -n "$resume" ] && steer="$steer
+$resume"
+
 jq -n --arg c "$steer" '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:$c}}'
 exit 0
