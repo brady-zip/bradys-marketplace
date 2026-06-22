@@ -16,9 +16,12 @@
 set -euo pipefail
 
 # --- Pinned versions ---------------------------------------------------------
-FORK_REF="v0.6.1"
+FORK_REF="v0.7.0"
 FORK_URL="git+https://github.com/brady-zip/mem0-mcp-selfhosted@${FORK_REF}"
 QDRANT_VERSION="v1.18.2"
+# spaCy model for the 2.x native hybrid pipeline (entity extraction +
+# lemmatization). Pin tracks the resolved spaCy major.minor (currently 3.8.x).
+SPACY_MODEL_URL="en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl"
 
 # --- Ports (isolated from a personal stack on 6333/6334/8081) ----------------
 QDRANT_HTTP_PORT="6433"
@@ -111,7 +114,16 @@ say "uv present ($(command -v uv))"
 # --- 2. Install the fork as a uv tool ---------------------------------------
 step "2/8  Install patched Mem0 fork (uv tool)"
 printf "  installing %s ...\n" "${FORK_URL}"
-uv tool install --force "${FORK_URL}" >/dev/null 2>&1 || die "uv tool install failed for ${FORK_URL}"
+# Pull mem0's optional dep groups so the 2.x native hybrid pipeline is live:
+#   extras -> fastembed (BM25 keyword sparse vectors); nlp -> spaCy (entity
+#   extraction + lemmatization). Without these, search degrades to vector-only.
+# The en_core_web_sm model is pinned as a wheel `--with` so it lands in the
+# uv-managed tool venv (a `python -m spacy download` shells out to pip, which
+# uv intercepts and fails). Track SPACY_MODEL_URL to spaCy's major.minor.
+uv tool install --force \
+  --with "mem0ai[extras,nlp]" \
+  --with "${SPACY_MODEL_URL}" \
+  "${FORK_URL}" >/dev/null 2>&1 || die "uv tool install failed for ${FORK_URL}"
 export PATH="${UV_BIN}:${PATH}"
 for bin in mem0-mcp-selfhosted mem0-hook-context mem0-hook-stop; do
   command -v "$bin" >/dev/null 2>&1 || die "$bin not on PATH after install (expected in ${UV_BIN})"

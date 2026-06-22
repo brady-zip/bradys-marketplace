@@ -10,7 +10,7 @@
     {
       "name": "mem0-brady",
       "description": "B's personal self-hosted Mem0 backbone — the single memory store shared by Claude Code and Hal. Does BOTH explicit hard facts (mcp__mem0__* tools) and passive auto-capture/recall (SessionStart/UserPromptSubmit/Read/Stop/PreCompact hooks), partitioned by app_id (evergreen / general / hal-ops). Bundles the grill-me skill (Mem0-backed plan/design interview). Native local Qdrant (no Docker) behind a launchd MCP server. Run /mem0-brady:setup once.",
-      "version": "260618.1",
+      "version": "260622.0",
       "author": {
         "name": "Brady Watkinson",
         "email": "brady@local"
