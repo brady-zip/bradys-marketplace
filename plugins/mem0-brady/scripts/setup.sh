@@ -60,18 +60,32 @@ http_code() {
   printf '%s' "${code:-000}"
 }
 
-# bootout (ignore "not loaded") then bootstrap a launchd agent; fall back to
-# kickstart if bootstrap reports it is already loaded.
+# bootout (ignore "not loaded"), wait for the job to fully unload, then
+# bootstrap with retries. `bootout` is ASYNC: bootstrapping before the old job
+# has finished tearing down races it and fails ("Input/output error"), and the
+# kickstart fallback then fails too because nothing is loaded yet — which is how
+# a re-run against an already-running stack used to leave the service down.
+# Polling until the job is gone + retrying bootstrap makes re-runs reliable.
 load_agent() {
-  local label="$1" plist="$2"
+  local label="$1" plist="$2" i
   launchctl bootout "${GUI}/${label}" >/dev/null 2>&1 || true
-  if launchctl bootstrap "$GUI" "$plist" 2>/dev/null; then
-    say "bootstrapped ${label}"
-  else
-    launchctl kickstart -k "${GUI}/${label}" >/dev/null 2>&1 \
-      && say "kickstarted ${label}" \
-      || die "could not load ${label} — check logs under ${DATA_DIR}"
-  fi
+  # wait until the old job is actually gone (up to ~5s)
+  for i in $(seq 1 10); do
+    launchctl print "${GUI}/${label}" >/dev/null 2>&1 || break
+    sleep 0.5
+  done
+  # retry bootstrap a few times; the unload may still be settling
+  for i in $(seq 1 5); do
+    if launchctl bootstrap "$GUI" "$plist" 2>/dev/null; then
+      say "bootstrapped ${label}"
+      return 0
+    fi
+    sleep 1
+  done
+  # last resort: kickstart if it happens to be loaded
+  launchctl kickstart -k "${GUI}/${label}" >/dev/null 2>&1 \
+    && say "kickstarted ${label}" \
+    || die "could not load ${label} — check logs under ${DATA_DIR}"
 }
 
 # Poll a URL until it answers (non-000) or times out.
