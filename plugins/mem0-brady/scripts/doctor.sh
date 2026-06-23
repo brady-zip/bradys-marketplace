@@ -110,6 +110,30 @@ else
   fail_required "storage dir missing: ${QDRANT_STORAGE}" "Run /mem0-brady:setup."
 fi
 
+# --- Reranker (optional) -----------------------------------------------------
+print_header "Reranker (optional)"
+RERANK_PROVIDER=""
+[ -f "$ENV_FILE" ] && RERANK_PROVIDER="$(grep -E '^MEM0_RERANK_PROVIDER=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)"
+if [ -z "$RERANK_PROVIDER" ]; then
+  pass "reranking disabled (MEM0_RERANK_PROVIDER unset) — search is vector-only"
+else
+  pass "reranking enabled (provider=${RERANK_PROVIDER})"
+  RERANK_MODEL="$(grep -E '^MEM0_RERANK_MODEL=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)"
+  RERANK_MODEL="${RERANK_MODEL:-cross-encoder/ms-marco-MiniLM-L-6-v2}"
+  TOOL_PY="$(uv tool dir 2>/dev/null)/mem0-mcp-selfhosted/bin/python"
+  if [ -x "$TOOL_PY" ] && "$TOOL_PY" -c "import sentence_transformers" >/dev/null 2>&1; then
+    pass "sentence-transformers importable in the tool venv"
+    # Fast cache probe (does NOT load torch/the model): is config.json cached?
+    if "$TOOL_PY" -c 'from huggingface_hub import try_to_load_from_cache as t; import sys; sys.exit(0 if isinstance(t(sys.argv[1],"config.json"),str) else 1)' "$RERANK_MODEL" >/dev/null 2>&1; then
+      pass "reranker model cached (${RERANK_MODEL})"
+    else
+      fail_optional "reranker model not cached (${RERANK_MODEL})" "Downloads (~80MB) on the server's next boot; or re-run /mem0-brady:setup to pre-cache."
+    fi
+  else
+    fail_optional "sentence-transformers not importable in the tool venv" "Re-run /mem0-brady:setup (reinstalls the fork with reranker deps)."
+  fi
+fi
+
 # --- Summary -----------------------------------------------------------------
 print_header "Summary"
 if [ "$REQUIRED_FAILED" -eq 0 ] && [ "$OPTIONAL_FAILED" -eq 0 ]; then

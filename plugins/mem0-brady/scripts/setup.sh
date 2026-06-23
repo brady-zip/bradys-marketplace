@@ -16,7 +16,7 @@
 set -euo pipefail
 
 # --- Pinned versions ---------------------------------------------------------
-FORK_REF="v0.7.0"
+FORK_REF="v0.8.0"
 FORK_URL="git+https://github.com/brady-zip/mem0-mcp-selfhosted@${FORK_REF}"
 QDRANT_VERSION="v1.18.2"
 # spaCy model for the 2.x native hybrid pipeline (entity extraction +
@@ -129,13 +129,16 @@ say "uv present ($(command -v uv))"
 step "2/8  Install patched Mem0 fork (uv tool)"
 printf "  installing %s ...\n" "${FORK_URL}"
 # Pull mem0's optional dep groups so the 2.x native hybrid pipeline is live:
-#   extras -> fastembed (BM25 keyword sparse vectors); nlp -> spaCy (entity
-#   extraction + lemmatization). Without these, search degrades to vector-only.
+#   extras -> fastembed (BM25 keyword sparse vectors) + sentence-transformers
+#   (the CrossEncoder reranker); nlp -> spaCy (entity extraction + lemmatization).
+#   Without these, search degrades to vector-only. sentence-transformers is also
+#   pinned explicitly so reranking works regardless of mem0's extras composition.
 # The en_core_web_sm model is pinned as a wheel `--with` so it lands in the
 # uv-managed tool venv (a `python -m spacy download` shells out to pip, which
 # uv intercepts and fails). Track SPACY_MODEL_URL to spaCy's major.minor.
 uv tool install --force \
   --with "mem0ai[extras,nlp]" \
+  --with "sentence-transformers>=5" \
   --with "${SPACY_MODEL_URL}" \
   "${FORK_URL}" >/dev/null 2>&1 || die "uv tool install failed for ${FORK_URL}"
 export PATH="${UV_BIN}:${PATH}"
@@ -143,6 +146,21 @@ for bin in mem0-mcp-selfhosted mem0-hook-context mem0-hook-stop; do
   command -v "$bin" >/dev/null 2>&1 || die "$bin not on PATH after install (expected in ${UV_BIN})"
 done
 say "console scripts installed: mem0-mcp-selfhosted, mem0-hook-context, mem0-hook-stop"
+
+# Pre-cache the reranker's CrossEncoder model so the launchd server's first boot
+# doesn't block on an ~80MB HuggingFace download. The server loads the reranker
+# eagerly at Memory init when MEM0_RERANK_PROVIDER is set (rendered into the .env
+# below), and a cold download could blow the :8788 readiness wait in step 8.
+# Cache is user-global (~/.cache/huggingface), shared with the launchd server.
+# Best-effort: warn, never die — the server can still fetch it lazily.
+RERANK_MODEL="cross-encoder/ms-marco-MiniLM-L-6-v2"
+TOOL_PY="$(uv tool dir 2>/dev/null)/mem0-mcp-selfhosted/bin/python"
+printf "  pre-caching reranker model %s ...\n" "$RERANK_MODEL"
+if [ -x "$TOOL_PY" ] && "$TOOL_PY" -c "import sys; from sentence_transformers import CrossEncoder; CrossEncoder(sys.argv[1])" "$RERANK_MODEL" >/dev/null 2>&1; then
+  say "reranker model cached (${RERANK_MODEL})"
+else
+  warn "reranker model pre-cache failed — the server will fetch it (~80MB) on first boot"
+fi
 
 # --- 3. Install the native Qdrant server binary -----------------------------
 step "3/8  Install native Qdrant server (${QDRANT_VERSION}, no Docker)"

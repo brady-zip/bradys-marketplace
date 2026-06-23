@@ -139,7 +139,7 @@ printf -- '--- SEARCHES (explicit mcp__mem0__search_memories) ---\n'
 srch="$(printf '%s\n' "$OPS_JSONL" | jq -rc --argjson from "$from" '
   select(.tool=="mcp__mem0__search_memories")
   | select((.ts|fromdateiso8601) >= $from)
-  | "[\(.ts)] app_id=\(.input.app_id // "?") limit=\(.input.limit // "-") session=\((.session_id // "")[0:8])  q=\"\(.input.query // "")\""
+  | "[\(.ts)] app_id=\(.input.app_id // "?") limit=\(.input.limit // "-") rerank=\(.input.rerank // "default") session=\((.session_id // "")[0:8])  q=\"\(.input.query // "")\""
   ' 2>/dev/null || true)"
 if [ -n "$srch" ]; then printf '%s\n\n' "$srch"; else printf '(none)\n\n'; fi
 
