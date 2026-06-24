@@ -121,9 +121,11 @@ exact output** — recall behaviour is unchanged, the logging is a fail-open sid
    ```
 4. **Register the MCP at the user level** (one line; keeps the `mcp__mem0__*` namespace):
    ```
-   claude mcp add --transport http mem0 http://127.0.0.1:8788/mcp
+   claude mcp add --transport http --scope user mem0 http://127.0.0.1:8788/mcp
    ```
-   Then **restart your Claude Code session** so the MCP server and hooks attach.
+   `--scope user` is required so mem0 loads in **every** project, not just the directory you
+   ran the command from (without it, `claude mcp add` defaults to `local` scope). Then
+   **restart your Claude Code session** so the MCP server and hooks attach.
 
 Verify any time with:
 ```

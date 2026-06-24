@@ -123,7 +123,7 @@ fi
 if [ "$REGISTERED" -eq 0 ]; then
   fail_required \
     "No mem0 MCP server found (checked 'claude mcp list' and ~/.claude.json)" \
-    "Register it: claude mcp add --transport http mem0 \"${MEM0_MCP_URL}\""
+    "Register it: claude mcp add --transport http --scope user mem0 \"${MEM0_MCP_URL}\""
 fi
 
 # --- Qdrant backing store (optional) ------------------------------------------
