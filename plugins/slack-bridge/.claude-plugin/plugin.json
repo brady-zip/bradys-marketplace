@@ -1,0 +1,9 @@
+{
+  "author": {
+    "name": "Brady Watkinson",
+    "email": "brady@local"
+  },
+  "description": "Bridge to Slack's web API via browser session tokens — exposes capabilities the hosted Slack MCP lacks: unread notifications, saved-for-later, and scheduled messages. Bundles a /slack-triage interactive board skill.",
+  "name": "slack-bridge",
+  "version": "260624.0"
+}

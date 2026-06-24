@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "Slack Bridge Token Grabber (local)",
+  "version": "1.0",
+  "description": "Reads your own xoxc/xoxd Slack session tokens and shows them for copying. Local use only.",
+  "permissions": ["cookies", "scripting", "activeTab", "storage"],
+  "host_permissions": ["https://*.slack.com/*"],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Grab Slack tokens"
+  }
+}

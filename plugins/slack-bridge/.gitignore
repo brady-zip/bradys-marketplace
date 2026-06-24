@@ -1,0 +1,11 @@
+# Never commit tokens or runtime data. Those live in ~/.config/slack-bridge/,
+# but guard against any stray copies landing here.
+.env
+*.env
+triaged.json
+unread.json
+board.html
+unread.html
+*.log
+__pycache__/
+*.pyc

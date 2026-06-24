@@ -16,6 +16,7 @@ Add the marketplace once per machine, then install whichever plugins you want:
 | Plugin | What it does |
 |--------|--------------|
 | [`mem0-brady`](plugins/mem0-brady/) | Self-hosted [Mem0](https://github.com/mem0ai/mem0) memory backbone — explicit hard facts (`mcp__mem0__*` tools) **and** passive auto-capture/recall via hooks, partitioned by `app_id`. Bundles the `grill-me` skill. Native local Qdrant (no Docker) behind a launchd MCP server. See its [README](plugins/mem0-brady/README.md) and run `/mem0-brady:setup` once after install. |
+| [`slack-bridge`](plugins/slack-bridge/) | Bridge to Slack's web API via browser session tokens (`xoxc`/`xoxd`) — surfaces what the hosted Slack MCP can't: true unread (Activity feed) with real bulk mark-read, and the saved-for-later "Later" list. Custom Python MCP server (13 tools) + skills: `/slack-triage`, `/slack-saved`, `/slack-unwrapped`, `/slack-setup`, `/slack-doctor`. See its [README](plugins/slack-bridge/README.md) and run `/slack-setup` once after install. Adapted from [@chuqian's slack-cleanup](https://github.com/Greenbax/evergreen/pull/112154). |
 
 ## Layout
 

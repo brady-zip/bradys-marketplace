@@ -17,6 +17,17 @@
       },
       "source": "./plugins/mem0-brady",
       "category": "productivity"
+    },
+    {
+      "name": "slack-bridge",
+      "description": "Bridge to Slack's web API via browser session tokens (xoxc/xoxd) — surfaces what the hosted Slack MCP can't: true unread (Activity feed) with real bulk mark-read, and the saved-for-later 'Later' list (list/complete/snooze/archive). Skills: /slack-triage (interactive unread board), /slack-saved (grounded, stateful followup worklist with a durable decision store), /slack-unwrapped (stats recap), plus /slack-setup and /slack-doctor. Bundles a custom Python MCP server (13 tools) + a Chrome token-grabber extension. Run /slack-setup once.",
+      "version": "260624.0",
+      "author": {
+        "name": "Brady Watkinson",
+        "email": "brady@local"
+      },
+      "source": "./plugins/slack-bridge",
+      "category": "productivity"
     }
   ]
 }
