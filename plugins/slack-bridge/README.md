@@ -46,7 +46,7 @@ The MCP server is launched by `.mcp.json` as `uv run ${CLAUDE_PLUGIN_ROOT}/serve
 | **`/slack-setup`** | Capture/refresh Slack session tokens via the Chrome extension; validate with `auth.test`. Run first, and whenever tokens expire. |
 | **`/slack-doctor`** | Health-check: uv, dotfile + perms, live `auth.test`, and the decision store. PASS/FAIL with fixes. |
 | **`/slack-triage`** | Interactive HTML board of your true unread, grouped by urgency + topic, with click-tracking and real bulk mark-read. Served at `localhost:8770`. |
-| **`/slack-saved`** | Triage your "Later" backlog into a chat digest, then **work the keepers one-by-one**: live-grounded next-step recommendations (PR status via `gh`, thread state via `read_thread`), auto-clear the obvious, walk the rest. Decisions persist; snoozes hide items until their date. |
+| **`/slack-saved`** | Two passes: first bucket the "Later" backlog into a digest + one overarching clear-the-stale call; then **walk the keepers one message at a time**, each live-grounded (PR status via `gh`, thread state via `read_thread`) with a single recommended action from an action bank — draft a reply, review the PR (`/review`), create a Linear ticket, hand off to implement, or save a TL;DR to memory. Decisions persist; snoozes hide items until their date. |
 | **`/slack-unwrapped`** | A "Spotify Wrapped"-style stats recap of your Slack life — backlog, unread snapshot, busiest channels/people, decisions logged. |
 
 ## MCP tools

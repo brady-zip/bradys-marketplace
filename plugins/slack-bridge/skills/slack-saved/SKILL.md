@@ -39,6 +39,8 @@ Ships with the **slack-bridge** plugin; shares its Slack client and session toke
    - **🔴 Still actionable** — needs the user to do something: a direct question/ask to them, a PR
      awaiting their review/response, a pending decision, a task they saved to act on.
    - **🟡 Worth a look** — reference/context they saved intentionally, no hard pending action.
+     Includes **TL;DRs / summaries / notes** the user saved to *remember* (recaps, decisions, design
+     writeups) — in the second pass these become **save-to-memory** candidates, not just "read again".
    - **⚪ Likely stale** — the moment has passed: old announcements/FYIs, resolved/superseded
      threads, bot posts, very old saves with no live ask.
 
@@ -50,45 +52,65 @@ Ships with the **slack-bridge** plugin; shares its Slack client and session toke
    min) rather than a burst, to avoid rate limits. Keepers are matched on `(item_id, ts)` pairs
    so messages sharing a channel with stale ones are never swept up.
 
-4. **Work the keep-set one-by-one** — this is the point of the skill: turn 🔴+🟡 into concrete
-   next steps. **Plan → auto-clear obvious → walk the rest.**
+4. **Work the keep-set one message at a time** (second pass) — this is the point of the skill. The
+   first pass bucketed and made **one overarching call** (clear the stale). The second pass is the
+   opposite: **no grouped action plan, no bulk auto-clear.** Walk the keep-set (🔴 first, then 🟡)
+   **one item at a time** — ground each, recommend a single next action from the **action bank**,
+   act on the user's choice, then advance.
 
-   a. **Ground each keeper with live state** (don't recommend blind):
-      - **PR links** in the text (`github.com/Greenbax/evergreen/pull/N` or `#NNNNN`): run
+   a. **Ground the keepers first** so the walk is fast, not blind. Do this for all keepers up front —
+      ideally one subagent that runs the lookups in parallel and returns the enriched list. Grounding
+      is enrichment, not action; only *acting* stays strictly one-by-one.
+      - **PR links** (`github.com/Greenbax/evergreen/pull/N` or `#NNNNN`):
         `gh pr view N --repo Greenbax/evergreen --json state,reviewDecision,mergedAt,title,reviewRequests`.
-        Open + you're a requested reviewer / not yet reviewed → **REVIEW**; merged/closed → **DONE/ARCHIVE**.
-      - **Questions / asks**: call the `read_thread(channel_id, ts)` MCP tool. `replied_by_me` true
-        or clearly resolved downstream → **DONE**; still unanswered & aimed at you → **REPLY**.
-      - Otherwise judge from text + age.
-      Enrich efficiently — for many items, spawn a subagent that returns the enriched plan (run
-      the `gh` lookups in parallel).
+        Open + you're a requested reviewer / not yet reviewed → lean **Review PR**; merged/closed →
+        lean **done / archive**.
+      - **Questions / asks**: `read_thread(channel_id, ts)`. `replied_by_me` true or clearly resolved
+        downstream → lean **done**; still unanswered & aimed at you → lean **draft a response**.
+      - **TL;DRs / summaries / notes** (the item *is* a recap — meeting notes, a decision summary, a
+        "TL;DR:" writeup, a reference snippet — not an ask) → lean **save to memory**.
+      - A task the user clearly meant to act on → lean **Linear ticket** (track it) or **handoff**
+        (start implementing now); otherwise judge from text + age.
 
-   b. **Present the ACTION PLAN** — every keeper grouped by recommended **disposition**, each a
-      one-line specific next step:
+   b. **Walk one item at a time.** For each keeper, show a single compact card and stop for the user:
 
-      Every disposition is **persisted** via `record_decision` so decisions survive across runs:
+      ```
+      [i/N] 🔴 · #channel · author · saved 6d ago
+      gist: <one line> — <grounded finding, e.g. "PR #82910 open, you're a requested reviewer">
+      → recommend: Review PR
+      [ open · draft reply · review PR · linear ticket · handoff · save to memory · done · archive · snooze · skip ]
+      ```
 
-      | Disposition | Meaning → action + durable record |
-      |---|---|
-      | **REPLY** | needs your response → open `permalink`; `record_decision(item_id, ts, "reply")` |
-      | **REVIEW** | PR open, awaiting you → open the PR; `record_decision(..., "review")` |
-      | **DO** | external task (e.g. update Linear) → open/note; `record_decision(..., "do")` |
-      | **DONE** | already handled → `complete_saved(item_id, ts)` + `record_decision(..., "done")` |
-      | **ARCHIVE** | no longer relevant → `remove_saved(item_id, ts)` + `record_decision(..., "archive")` |
-      | **SNOOZE** | revisit later → `record_decision(item_id, ts, "snooze", snooze_until=<unix>)` — **hidden until that date**; optionally also `snooze_saved(...)` to set Slack's own reminder |
-      | **KEEP** | leave as-is → `record_decision(..., "keep")` |
+      Surface only the menu entries that fit the item (don't offer "review PR" on a non-PR). Pick the
+      **one** recommended action from the action bank below; the user can override with any entry.
+      Execute the choice, **persist it** with `record_decision`, then advance to `[i+1/N]`. Keep it
+      tight — this is a worklist, not a conversation.
 
-      For **SNOOZE**, convert the user's phrasing ("snooze a week", "next Monday") into a unix
-      timestamp relative to today and pass it as `snooze_until`. The bulk auto-clear in (c) records
-      its DONE/ARCHIVE decisions too.
+## Action bank (per-item, second pass)
 
-   c. **Auto-clear the unambiguous** on the user's OK: bulk `complete_saved` the DONE set and
-      `remove_saved` the ARCHIVE set (these are mechanical — no per-item decision needed).
+Recommend exactly **one** action per keeper. Every action ends with a durable `record_decision` so
+the item won't resurface (snooze excepted — it resurfaces on its date).
 
-   d. **Walk the rest one at a time** (REPLY / REVIEW / DO and anything ambiguous). For each, show:
-      `[i/N] tier · #channel · author (saved Nd) — gist + grounded finding → NEXT: <step>` and offer
-      `[ open · mark done · archive · snooze · skip ]`. Act on the choice via the tools below, then
-      advance. Keep it tight; this is a worklist, not a conversation.
+| When the item is… | Recommend | How to execute | Record |
+|---|---|---|---|
+| a question/ask still aimed at you | **Draft a response** | Compose a suggested reply in chat (match the author's tone, keep it short). slack-bridge can't post — open the `permalink` to paste it, or send via the Slack MCP if one is available. | `record_decision(item_id, ts, "reply")` |
+| an open PR awaiting your review | **Review PR** | Invoke the **`/review`** skill on the PR URL/number — it reviews the remote PR, no local checkout needed. | `record_decision(..., "review")` |
+| an actionable task/bug worth tracking | **Create Linear ticket** | Run the Linear sub-flow ↓. | `record_decision(..., "do", note="<ticket URL>")` |
+| a task you want to start implementing now | **Implement (handoff)** | Invoke the **`handoff`** skill to spin up an implementation handoff. If it isn't installed, tell the user to add it: `npx skills add https://github.com/mattpocock/skills --skill handoff`, then continue. | `record_decision(..., "do")` |
+| a TL;DR / summary / notes / reference fact | **Save to memory** | Save the gist via mem0 (`mcp__mem0__add_memory`, `app_id="general"`). If the mem0 tools aren't available, tell the user to install the **mem0-brady** plugin, then continue. Once saved, the item is captured → `complete_saved`. | `record_decision(..., "done", note="saved to memory")` |
+| already handled / resolved | **Mark done** | `complete_saved(item_id, ts)`. | `record_decision(..., "done")` |
+| no longer relevant | **Archive** | `remove_saved(item_id, ts)`. | `record_decision(..., "archive")` |
+| not now, but later | **Snooze** | Convert "a week" / "next Monday" to a unix ts relative to today; optionally `snooze_saved(item_id, ts, until)` to set Slack's own reminder. Hidden until then. | `record_decision(..., "snooze", snooze_until=<unix>)` |
+| worth keeping as-is | **Keep** | leave it untouched. | `record_decision(..., "keep")` |
+
+**Create Linear ticket sub-flow** (uses the Linear MCP):
+1. **Draft** a title + description from the message and any grounded thread context; put the Slack
+   `permalink` in the description so the ticket links back.
+2. **Pick the project**: infer the best-matching project from the message content / channel via
+   `mcp__plugin_linear_linear__list_projects`, and show it for one-tap confirmation — the user can
+   override. (Resolve the project's team for the create call.)
+3. **Confirm, then create** with `mcp__plugin_linear_linear__save_issue` (title, description, chosen
+   project + team). Report the new issue URL back and pass it as the `record_decision` note.
 
 ## Acting on items (writes — confirm first)
 
