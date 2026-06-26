@@ -16,7 +16,7 @@
 set -euo pipefail
 
 # --- Pinned versions ---------------------------------------------------------
-FORK_REF="v0.9.0"
+FORK_REF="v0.10.0"
 FORK_URL="git+https://github.com/brady-zip/mem0-mcp-selfhosted@${FORK_REF}"
 QDRANT_VERSION="v1.18.2"
 # spaCy model for the 2.x native hybrid pipeline (entity extraction +

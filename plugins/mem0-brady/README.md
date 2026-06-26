@@ -177,7 +177,8 @@ Run `/mem0-brady:doctor` first — it pinpoints which layer is broken and prints
 
 Setup boots out any stale `com.mem0team.*` agents from the plugin's former name (`mem0-team`).
 
-The fork is pinned to a tagged release: `github.com/brady-zip/mem0-mcp-selfhosted@v0.6.1`
-(`app_id`-aware capture/recall, prompt/file-context/pre-compact lifecycle hooks, and the
-`general` default for untagged writes). Qdrant is pinned to `v1.18.2` (prebuilt
+The fork is pinned to a tagged release: `github.com/brady-zip/mem0-mcp-selfhosted@v0.10.0`
+(`app_id`-aware capture/recall, prompt/file-context/pre-compact lifecycle hooks, the
+`general` default for untagged writes, and resume handoffs that build on the previous
+handoff for continuity). Qdrant is pinned to `v1.18.2` (prebuilt
 `*-apple-darwin` binary from GitHub releases).
