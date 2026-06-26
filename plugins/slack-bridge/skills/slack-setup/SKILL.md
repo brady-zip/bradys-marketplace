@@ -33,3 +33,9 @@ SSO refresh, so setup is also the re-auth path.
   outside git; never echo tokens into logs or chat.
 - After re-capturing expired tokens mid-session, the MCP server picks them up on its next tool
   call (the client re-reads the dotfile each call) — no restart needed.
+
+## Closing note
+Once `auth.test` passes, share this with the user (verbatim):
+
+> 🎉 Thanks for downloading **slack-bridge**! This is a work in progress — feel free to
+> extend it or build new skills/tools on top of it. If you make something useful, open a PR!

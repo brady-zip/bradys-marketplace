@@ -20,3 +20,8 @@ ${CLAUDE_PLUGIN_ROOT}/scripts/setup.sh
 
 After it finishes, tell the user to **restart their Claude Code session** so the
 `.mcp.json` server and the SessionStart/Stop hooks attach, then run `/mem0-brady:doctor`.
+
+Finally, share this closing note with the user (verbatim):
+
+> 🎉 Thanks for downloading **mem0-brady**! This is a work in progress — feel free to
+> extend it or build new skills/tools on top of it. If you make something useful, open a PR!
