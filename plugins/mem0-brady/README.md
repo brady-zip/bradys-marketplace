@@ -104,11 +104,18 @@ This is powered by two append-only logs under `~/.local/share/mem0-brady/logs/`:
 |-----|-----------|-------|
 | `mem0_ops.log` | `PostToolUse(mcp__mem0__*)` hook | every explicit `add_memory` / `search_memories` call (TSV: ts + `{tool,session_id,input}`) |
 | `mem0_recall.log` | the recall hooks (capture-tee-replay) | every hook injection (JSONL: `{ts,hook,session_id,app_id,chars,content}`) |
+| `mem0_denials.log` | `PreToolUse(mcp__mem0__*)` guard (`enforce-metadata.sh`) | every guard action (TSV: ts + `{tool,session_id,outcome,detail,input_keys}`) — an auto-injected `app_id` or a denied non-shared `user_id`. These never reach `mem0_ops.log`, because a PreToolUse deny/inject never triggers PostToolUse |
 | `current_session.json` | `SessionStart` steer hook | marker for the most-recently-started session, so the digest can scope to it |
 
 The recall hooks run the fork console script, **log what it injected, then replay its
 exact output** — recall behaviour is unchanged, the logging is a fail-open side effect.
 `mem0_recall.log` only starts filling on sessions that begin *after* this is installed.
+
+The `enforce-metadata.sh` write guard keeps every `add_memory` in the right partition. A
+missing `app_id` is **auto-injected** from the session cwd's domain (via PreToolUse
+`updatedInput`) rather than bounced back to the model — so a write can't silently misfile into
+`general` when the session is in another domain. A pinned non-shared `user_id` is still denied
+(it would fragment the shared store). Both actions are audited to `mem0_denials.log`.
 
 ## Workstreams
 
