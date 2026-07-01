@@ -21,13 +21,16 @@ case "$cwd" in
   *) domain=general ;;
 esac
 
-# Stamp the current-session marker so /mem0-brady:digest can tell an ongoing
-# session (scope to it) from a freshly-opened one (scope to the whole day).
+# Stamp the current-session markers. The global marker lets /mem0-brady:digest
+# tell an ongoing session (scope to it) from a freshly-opened one (scope to the
+# whole day). The per-cwd marker lets the /mem0-brady:workstream skill learn
+# THIS session's id (the global one is overwritten by whichever session started
+# last, so it can't identify a specific concurrent session).
 # shellcheck source=lib-recall-log.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib-recall-log.sh"
-mem0_write_session_marker \
-  "$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)" \
-  "$cwd" "$domain"
+session_id="$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)"
+mem0_write_session_marker "$session_id" "$cwd" "$domain"
+mem0_write_cwd_session_marker "$session_id" "$cwd"
 
 steer="Memory is active (Mem0, self-hosted). This session's Mem0 DOMAIN is app_id='${domain}' (cwd=${cwd}).
 Mem0 is the SINGLE memory backbone — it does BOTH explicit hard facts AND passive capture/recall. There is no Honcho.

@@ -47,6 +47,29 @@ mem0_write_session_marker() {
     > "$MEM0_SESSION_MARKER" 2>/dev/null || true
 }
 
+# mem0_write_cwd_session_marker <session_id> <cwd>
+# Write a PER-CWD session marker. The /mem0-brady:workstream skill reads it to
+# learn THIS session's id so it can key the active-workstream pointer on the
+# same session_id the Stop/PreCompact hooks report. The global marker above
+# can't serve this: it's a single file overwritten by whichever session started
+# last, so it can't identify a specific concurrent session. Path scheme matches
+# the handoff hash (sessions/<sha1(cwd)[:8]>.json) so the skill can locate it
+# from $PWD alone. Fail-open.
+mem0_write_cwd_session_marker() {
+  local sid="$1" cwd="$2"
+  [ -n "$sid" ] || return 0
+  [ -n "$cwd" ] || return 0
+  local dir digest ts
+  dir="${MEM0_BRADY_SESSIONS_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/mem0-brady/sessions}"
+  digest="$(printf '%s' "$cwd" | shasum -a 1 2>/dev/null | cut -c1-8)"
+  [ -n "$digest" ] || return 0
+  mkdir -p "$dir" 2>/dev/null || return 0
+  ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  jq -nc --arg sid "$sid" --arg cwd "$cwd" --arg ts "$ts" \
+    '{session_id:$sid,cwd:$cwd,started_at:$ts}' \
+    > "$dir/$digest.json" 2>/dev/null || true
+}
+
 # mem0_handoff_pointer <cwd>
 # Echo a one-line resume pointer if a recent handoff file exists for <cwd>, else
 # nothing. The handoff file is written by the fork's Stop/PreCompact hooks; this
