@@ -10,6 +10,7 @@
 #   - both launchd agents loaded (com.mem0brady.qdrant, com.mem0brady.server)
 #   - the Qdrant server answers on :6433 and the MCP server on :8788
 #   - the Qdrant storage dir is present + writable
+#   - (optional) workstream dirs + any active workstream tags
 #
 # Exits 0 if all required checks pass, 1 otherwise. Optional checks warn but
 # never fail the run.
@@ -132,6 +133,43 @@ else
   else
     fail_optional "sentence-transformers not importable in the tool venv" "Re-run /mem0-brady:setup (reinstalls the fork with reranker deps)."
   fi
+fi
+
+# --- Workstreams (optional) --------------------------------------------------
+print_header "Workstreams (optional)"
+# Multi-session work grouping (/mem0-brady:workstream). All paths are created
+# lazily on first activation, so absence is normal — never a hard failure. Paths
+# honor the same overrides the fork + workstream.py use.
+WORKSTREAM_DIR="${MEM0_WORKSTREAM_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/mem0-brady/workstreams}"
+WS_ACTIVE_DIR="${WORKSTREAM_DIR}/active"
+SESSIONS_DIR="${MEM0_BRADY_SESSIONS_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/mem0-brady/sessions}"
+# Extract a string field from a pretty-printed pointer JSON (no jq dependency).
+_ws_field() { sed -nE "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"([^\"]*)\".*/\1/p" "$1" 2>/dev/null | head -1; }
+
+if [ -d "$WORKSTREAM_DIR" ]; then
+  ws_docs="$(find "$WORKSTREAM_DIR" -maxdepth 1 -type f -name '*.md' 2>/dev/null | wc -l | tr -d ' ')"
+  pass "workstreams dir present: ${WORKSTREAM_DIR} (${ws_docs} doc(s))"
+  [ -w "$WORKSTREAM_DIR" ] || fail_optional "workstreams dir not writable: ${WORKSTREAM_DIR}" "chmod u+w ${WORKSTREAM_DIR}"
+else
+  pass "no workstreams yet — created on first /mem0-brady:workstream activation"
+fi
+
+if [ -d "$SESSIONS_DIR" ]; then
+  sess_n="$(find "$SESSIONS_DIR" -maxdepth 1 -type f -name '*.json' 2>/dev/null | wc -l | tr -d ' ')"
+  pass "per-cwd session markers present: ${SESSIONS_DIR} (${sess_n})"
+else
+  pass "no session markers yet — steer.sh writes one per cwd at SessionStart"
+fi
+
+if [ -d "$WS_ACTIVE_DIR" ] && find "$WS_ACTIVE_DIR" -maxdepth 1 -type f -name '*.json' 2>/dev/null | grep -q .; then
+  n="$(find "$WS_ACTIVE_DIR" -maxdepth 1 -type f -name '*.json' 2>/dev/null | wc -l | tr -d ' ')"
+  pass "${n} active workstream tag(s):"
+  find "$WS_ACTIVE_DIR" -maxdepth 1 -type f -name '*.json' 2>/dev/null | while IFS= read -r f; do
+    slug="$(_ws_field "$f" slug)"; sid="$(_ws_field "$f" session_id)"; when="$(_ws_field "$f" activated_at)"
+    printf "          - %s  (session %s, activated %s)\n" "${slug:-?}" "${sid:0:8}" "${when:-?}"
+  done
+else
+  pass "no active workstream tags — no session is currently tagged"
 fi
 
 # --- Summary -----------------------------------------------------------------
