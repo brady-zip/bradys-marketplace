@@ -95,7 +95,7 @@ if [ "$MCP_CODE" != "000" ]; then
 else
   fail_required \
     "mem0 MCP server not reachable at ${MEM0_MCP_URL}" \
-    "Start the self-hosted mem0 MCP server (project ~/dev/unified-memory/mem0-mcp-selfhosted), and make sure its backing Qdrant container is up (docker start openmemory-mem0_store-1). Override the URL with MEM0_MCP_URL if you run it elsewhere."
+    "Run /mem0-brady:setup to install the vendored mem0 MCP server (plugin ../server) and boot its launchd agent + native Qdrant, then /mem0-brady:doctor to verify. Override the URL with MEM0_MCP_URL if you run it elsewhere."
 fi
 
 # --- mem0 MCP server registered with the Claude client ------------------------

@@ -3,7 +3,7 @@
 # One-time installer for the mem0-brady plugin. Run via /mem0-brady:setup.
 #
 # Stands up a fully local, no-Docker stack:
-#   - the patched self-hosted Mem0 fork as a uv tool (OpenAI provider)
+#   - the vendored self-hosted Mem0 server (../server) as a uv tool (OpenAI provider)
 #   - a native Qdrant SERVER binary under launchd (isolated ports 6433/6434)
 #   - the mem0 MCP server under launchd (HTTP on :8788), pointed at that Qdrant
 #
@@ -16,8 +16,8 @@
 set -euo pipefail
 
 # --- Pinned versions ---------------------------------------------------------
-FORK_REF="v0.11.0"
-FORK_URL="git+https://github.com/brady-zip/mem0-mcp-selfhosted@${FORK_REF}"
+# The mem0 MCP server is vendored into this plugin at ../server (installed from
+# that local source below), so there is no GitHub pin to track anymore.
 QDRANT_VERSION="v1.18.2"
 # spaCy model for the 2.x native hybrid pipeline (entity extraction +
 # lemmatization). Pin tracks the resolved spaCy major.minor (currently 3.8.x).
@@ -29,6 +29,10 @@ QDRANT_HTTP_PORT="6433"
 # --- Paths -------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEMPLATES="${SCRIPT_DIR}/templates"
+# The vendored mem0 MCP server source lives beside scripts/ inside the plugin.
+# Resolves for both `--plugin-dir` local iteration and the marketplace cache
+# path (~/.claude/plugins/cache/bradys-marketplace/mem0-brady/<version>/server).
+SERVER_DIR="$(cd "${SCRIPT_DIR}/../server" && pwd)"
 CONFIG_DIR="${HOME}/.config/mem0-brady"
 ENV_FILE="${CONFIG_DIR}/.env"
 DATA_DIR="${HOME}/.local/share/mem0-brady"
@@ -125,9 +129,10 @@ if ! command -v uv >/dev/null 2>&1; then
 fi
 say "uv present ($(command -v uv))"
 
-# --- 2. Install the fork as a uv tool ---------------------------------------
-step "2/8  Install patched Mem0 fork (uv tool)"
-printf "  installing %s ...\n" "${FORK_URL}"
+# --- 2. Install the vendored server as a uv tool ----------------------------
+step "2/8  Install vendored Mem0 server (uv tool)"
+[ -f "${SERVER_DIR}/pyproject.toml" ] || die "vendored server not found at ${SERVER_DIR} (expected pyproject.toml)"
+printf "  installing from %s ...\n" "${SERVER_DIR}"
 # Pull mem0's optional dep groups so the 2.x native hybrid pipeline is live:
 #   extras -> fastembed (BM25 keyword sparse vectors) + sentence-transformers
 #   (the CrossEncoder reranker); nlp -> spaCy (entity extraction + lemmatization).
@@ -140,7 +145,7 @@ uv tool install --force \
   --with "mem0ai[extras,nlp]" \
   --with "sentence-transformers>=5" \
   --with "${SPACY_MODEL_URL}" \
-  "${FORK_URL}" >/dev/null 2>&1 || die "uv tool install failed for ${FORK_URL}"
+  "${SERVER_DIR}" >/dev/null 2>&1 || die "uv tool install failed for ${SERVER_DIR}"
 export PATH="${UV_BIN}:${PATH}"
 for bin in mem0-mcp-selfhosted mem0-hook-context mem0-hook-stop; do
   command -v "$bin" >/dev/null 2>&1 || die "$bin not on PATH after install (expected in ${UV_BIN})"
