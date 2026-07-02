@@ -102,4 +102,13 @@ Activation doesn't write to Mem0. Separately, while a session is tagged, the Sto
 auto-captured session summary with `workstream_id` so `/mem0-brady:digest` and passive recall
 can filter by workstream — additive, with the file doc remaining the source of truth.
 
+## Footer badge (open the active workstream doc)
+
+Both `activate` and `show` print a `Doc: <details-doc-path>` line. If the user has a `file:`
+footer-link badge configured — a `footerLinksRegexes` entry in `~/.claude/settings.json` keyed
+on the `workstreams/<slug>.md` path, enabled by the local Claude Code `file:`-scheme patch —
+that line renders a clickable footer badge that opens the doc in the default `.md` app. This is
+user-local config (not shipped by the plugin); the helper just emits the path so the badge can
+latch onto it. Nothing to do here beyond running the skill normally.
+
 </supporting-info>

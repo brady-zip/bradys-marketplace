@@ -290,6 +290,10 @@ def cmd_show(rest: list[str]) -> int:
         if not doc.is_file():
             print(f"No workstream doc for '{slug}' at {doc}", file=sys.stderr)
             return 1
+        # Emit the doc path (mirrors cmd_activate) so a `file:` footer-link badge
+        # keyed on this path surfaces a clickable "open the doc" affordance.
+        print(f"Doc: {doc}")
+        print()
         _print_overview(doc)
         return 0
     # No slug: report the workstream tagging THIS session, if any.
@@ -303,6 +307,9 @@ def cmd_show(rest: list[str]) -> int:
         slug = data.get("slug", "")
         print(f"This session is tagged with workstream '{slug}'.")
         doc = Path(data.get("doc_path") or _doc_path(slug))
+        # Emit the doc path (mirrors cmd_activate) so a `file:` footer-link badge
+        # keyed on this path surfaces a clickable "open the doc" affordance.
+        print(f"Doc: {doc}")
         print()
         if doc.is_file():
             _print_overview(doc)
