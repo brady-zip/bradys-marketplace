@@ -1,0 +1,9 @@
+{
+  "author": {
+    "name": "Brady Watkinson",
+    "email": "brady@local"
+  },
+  "description": "h5i agent radio - live peer messaging between an interactive Claude Code and Codex session over refs/h5i/msg, with per-session identity locking and a coordinated dual-runtime setup skill",
+  "name": "h5i-radio",
+  "version": "260716.0"
+}

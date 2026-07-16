@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+#
+# SessionEnd hook: release the identity lock this session claimed.
+#
+# Claude Code runs this on SessionEnd and pipes the hook payload JSON
+# ({session_id, cwd, reason, ...}) on stdin. We hand it to identity-lock.sh's
+# release-hook, which extracts session_id + cwd, cd's to the repo, and removes
+# only the lock owned by this session. Idempotent and side-effect only — never
+# blocks session teardown.
+
+DIR="$(cd "$(dirname "$0")/.." && pwd)"
+exec bash "${DIR}/scripts/identity-lock.sh" release-hook
