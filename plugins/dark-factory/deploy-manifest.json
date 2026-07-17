@@ -1,6 +1,13 @@
 {
   "schemaVersion": 1,
   "settingsPath": ".claude/settings.json",
+  "gsd": {
+    "package": "@opengsd/gsd-core",
+    "version": "1.6.1",
+    "runtime": "codex",
+    "scope": "full",
+    "presenceMarker": ".codex/gsd-core"
+  },
   "objects": [
     {
       "id": "claude-radio-command",
@@ -59,12 +66,12 @@
       "executable": false
     },
     {
-      "id": "codex-hooks-json",
-      "type": "file",
+      "id": "codex-sessionstart-hook",
+      "type": "codex-hook-merge",
       "source": "codex/hooks.json",
       "dest": ".codex/hooks.json",
-      "executable": false,
-      "noClobber": true
+      "event": "SessionStart",
+      "matchCommand": "dark-factory-codex-session-start.cjs"
     },
     {
       "id": "h5i-agent-env",

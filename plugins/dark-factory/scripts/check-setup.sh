@@ -2,12 +2,13 @@
 #
 # Preflight/doctor for the dark-factory plugin's setup.
 #
-# Verifies the prerequisites the radio pattern and the Codex SessionStart
-# adapter depend on:
+# Verifies the prerequisites the radio pattern, the Codex SessionStart adapter,
+# and GSD (get-shit-done core) provisioning depend on:
 #   - git        (lock state + repo-scoped deploy live under .git / repo root)
 #   - h5i CLI    (the radio transport + `h5i init` / `h5i hook codex prelude`)
 #   - node       (runs the Codex SessionStart adapter, a .cjs file)
-#   - jq         (setup.sh merges .claude/settings.json with jq)
+#   - jq         (setup.sh merges .claude/settings.json + .codex/hooks.json with jq)
+#   - npx        (optional; provisions GSD from its pinned npm package)
 #
 # Exits 0 if all required checks pass, 1 otherwise. Optional checks warn only.
 
@@ -53,7 +54,14 @@ print_header "jq (required for settings.json merge)"
 if command -v jq >/dev/null 2>&1; then
   pass "jq found at $(command -v jq)"
 else
-  fail_required "jq not on PATH" "Install jq (brew install jq). setup.sh uses it to merge .claude/settings.json without clobbering other keys."
+  fail_required "jq not on PATH" "Install jq (brew install jq). setup.sh uses it to merge .claude/settings.json and .codex/hooks.json without clobbering other keys."
+fi
+
+print_header "npx (optional; for GSD provisioning)"
+if command -v npx >/dev/null 2>&1; then
+  pass "npx found at $(command -v npx)"
+else
+  fail_optional "npx not on PATH" "GSD (get-shit-done core) is provisioned via npx from a pinned npm package. Without npx, run setup with --skip-gsd (or install Node.js) — the rest of setup still proceeds."
 fi
 
 print_header "Summary"

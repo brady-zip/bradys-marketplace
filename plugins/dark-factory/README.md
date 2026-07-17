@@ -74,11 +74,13 @@ bash "${CLAUDE_PLUGIN_ROOT}/scripts/setup.sh"
 ```
 
 or just ask Claude to "set up dark factory in this repo" (invokes the `radio-setup`
-skill). It runs preflight (git/h5i/node/jq), `h5i init`, deploys the assets,
-merges `env.H5I_AGENT=claude` + the SessionEnd cleanup hook into
-`.claude/settings.json`, and installs the Codex SessionStart prelude adapter
-(`.codex/hooks/dark-factory-codex-session-start.cjs` + a `{"type":"commonjs"}` boundary —
-the fix for h5i's `[`-leading prelude output being rejected as JSON).
+skill). It runs preflight (git/h5i/node/jq/npx), `h5i init`, deploys the assets,
+provisions **GSD (get-shit-done core)** for Codex (`npx … @opengsd/gsd-core` — pinned,
+idempotent, `--skip-gsd` to opt out), merges `env.H5I_AGENT=claude` + the SessionEnd
+cleanup hook into `.claude/settings.json`, and merges the Codex SessionStart prelude
+adapter (`.codex/hooks/dark-factory-codex-session-start.cjs` + a `{"type":"commonjs"}`
+boundary — the fix for h5i's `[`-leading prelude output being rejected as JSON) into
+`.codex/hooks.json` — created if absent, appended without clobbering GSD's own entries.
 
 Then: launch Codex as `H5I_AGENT=codex codex`, trust project hooks via Codex's
 `/hooks`, and **commit** the deployed files (GSD-style resets discard uncommitted
@@ -118,7 +120,7 @@ scripts/identity-lock.sh       identity lock library (shared, deployed to repos)
 scripts/setup.sh               deploy engine (--check/--dry-run/--force)
 scripts/check-setup.sh         preflight/doctor
 codex/prompts/radio.md         Codex operator loop
-codex/hooks.json               Codex SessionStart adapter registration
+codex/hooks.json               SessionStart adapter entry (merge template for .codex/hooks.json)
 codex/hooks/*.cjs, package.json  Codex prelude adapter + commonjs boundary
-deploy-manifest.json           source -> dest mappings for setup.sh
+deploy-manifest.json           source -> dest mappings + GSD config for setup.sh
 ```
