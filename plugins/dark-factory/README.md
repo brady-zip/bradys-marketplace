@@ -1,6 +1,6 @@
-# h5i-radio
+# dark-factory
 
-A dual-runtime plugin for the **h5i agent radio** pattern: a live peer-messaging
+A dual-runtime plugin for the **dark factory agent radio** pattern: a live peer-messaging
 channel between an interactive **Claude Code** session and an interactive **Codex**
 session over the git ref `refs/h5i/msg`, driven by the external
 [`h5i`](https://h5i.dev/) CLI. It consolidates the hand-copied radio pattern from
@@ -39,7 +39,7 @@ runtime default** (`claude` under Claude, `codex` under Codex). `/radio roadmap`
 `scripts/identity-lock.sh` gives the **operator loop** a repo-local lock so two live
 sessions never share an identity (which would race the shared inbox cursor and reply
 view). Lock state lives inside `.git` (per-clone, uncommitted):
-`.git/h5i-radio/locks/<identity>.lock`.
+`.git/dark-factory/locks/<identity>.lock`.
 
 - **Simple by design:** create-on-start / remove-on-end. No heartbeat, no TTL.
 - **Claude cleanup is automatic:** the plugin's `SessionEnd` hook releases the lock
@@ -50,7 +50,7 @@ view). Lock state lives inside `.git` (per-clone, uncommitted):
   identity forever.
 - **Codex limitation:** Codex has **no SessionEnd hook**. Its radio prompt releases
   the lock at loop-exit; a killed Codex session can leave a stale lock. Clear it
-  with `.h5i-radio/identity-lock.sh release <identity> --force`, or just use a
+  with `.dark-factory/identity-lock.sh release <identity> --force`, or just use a
   different identity.
 
 ```
@@ -73,11 +73,11 @@ bash "${CLAUDE_PLUGIN_ROOT}/scripts/setup.sh" --check
 bash "${CLAUDE_PLUGIN_ROOT}/scripts/setup.sh"
 ```
 
-or just ask Claude to "set up h5i radio in this repo" (invokes the `radio-setup`
+or just ask Claude to "set up dark factory in this repo" (invokes the `radio-setup`
 skill). It runs preflight (git/h5i/node/jq), `h5i init`, deploys the assets,
 merges `env.H5I_AGENT=claude` + the SessionEnd cleanup hook into
 `.claude/settings.json`, and installs the Codex SessionStart prelude adapter
-(`.codex/hooks/h5i-codex-session-start.cjs` + a `{"type":"commonjs"}` boundary —
+(`.codex/hooks/dark-factory-codex-session-start.cjs` + a `{"type":"commonjs"}` boundary —
 the fix for h5i's `[`-leading prelude output being rejected as JSON).
 
 Then: launch Codex as `H5I_AGENT=codex codex`, trust project hooks via Codex's

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# identity-lock.sh - per-session identity lock for the h5i radio pattern.
+# identity-lock.sh - per-session identity lock for the dark factory radio pattern.
 #
-# The h5i radio is a live peer channel (refs/h5i/msg) between agent sessions,
+# The dark factory radio is a live peer channel (refs/h5i/msg) between agent sessions,
 # each addressed by an identity (e.g. `claude`, `codex`, `claude-roadmap`).
 # Two live sessions holding the SAME identity race the shared inbox read cursor
 # and the numbered reply view. This script gives an identity a lightweight,
@@ -17,9 +17,9 @@
 #     backstop so a crashed session that recorded a real pid never blocks the
 #     identity forever. There is no heartbeat and no time-based expiry.
 #
-# Lock file:    <git-dir>/h5i-radio/locks/<identity>.lock
+# Lock file:    <git-dir>/dark-factory/locks/<identity>.lock
 #   TSV line:   <session_id>\t<pid>\t<host>\t<epoch>
-# Session map:  <git-dir>/h5i-radio/sessions/<session_id>  -> contains <identity>
+# Session map:  <git-dir>/dark-factory/sessions/<session_id>  -> contains <identity>
 #   (lets the session-end hook, which only knows session_id, find the identity
 #    to release.)
 #
@@ -51,7 +51,7 @@ lock_base() {
   local gd
   gd="$(git rev-parse --git-dir 2>/dev/null)" || return 1
   gd="$(cd "$gd" && pwd)" || return 1
-  printf '%s/h5i-radio' "$gd"
+  printf '%s/dark-factory' "$gd"
 }
 
 pid_alive() {

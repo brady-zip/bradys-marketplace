@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/h5i-codex-session-start.cjs\""
+            "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/dark-factory-codex-session-start.cjs\""
           }
         ]
       }

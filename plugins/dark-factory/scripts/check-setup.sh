@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Preflight/doctor for the h5i-radio plugin's setup.
+# Preflight/doctor for the dark-factory plugin's setup.
 #
 # Verifies the prerequisites the radio pattern and the Codex SessionStart
 # adapter depend on:
@@ -46,7 +46,7 @@ print_header "node (required for the Codex SessionStart adapter)"
 if command -v node >/dev/null 2>&1; then
   pass "node found at $(command -v node) ($(node --version 2>/dev/null))"
 else
-  fail_required "node not on PATH" "Install Node.js. The Codex prelude adapter (.codex/hooks/h5i-codex-session-start.cjs) runs under node."
+  fail_required "node not on PATH" "Install Node.js. The Codex prelude adapter (.codex/hooks/dark-factory-codex-session-start.cjs) runs under node."
 fi
 
 print_header "jq (required for settings.json merge)"
@@ -58,7 +58,7 @@ fi
 
 print_header "Summary"
 if [ "$REQUIRED_FAILED" -eq 0 ] && [ "$OPTIONAL_FAILED" -eq 0 ]; then
-  printf "${GREEN}All checks passed.${NC} h5i-radio setup can proceed.\n"
+  printf "${GREEN}All checks passed.${NC} dark-factory setup can proceed.\n"
   exit 0
 fi
 [ "$REQUIRED_FAILED" -gt 0 ] && printf "${RED}%s required check(s) failed.${NC} Fix them before running setup.\n" "$REQUIRED_FAILED"

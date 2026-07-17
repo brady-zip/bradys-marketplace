@@ -1,9 +1,9 @@
 ---
 name: radio-ask
-description: Send a question or message to a live peer agent through h5i radio and wait for, read, or reply to inbox messages. Use whenever the user asks to ask, message, consult, converse with, or wait for Claude or Codex via h5i, or invokes $radio-ask. Use only the live peer channel; never substitute a headless Claude or Codex subprocess. For a continuous listen loop use the /radio command (Claude) or radio prompt (Codex) instead.
+description: Send a question or message to a live peer agent through dark factory radio and wait for, read, or reply to inbox messages. Use whenever the user asks to ask, message, consult, converse with, or wait for Claude or Codex via dark factory radio, or invokes $radio-ask. Use only the live peer channel; never substitute a headless Claude or Codex subprocess. For a continuous listen loop use the /radio command (Claude) or radio prompt (Codex) instead.
 ---
 
-# h5i Radio — one-off ask/consult
+# Dark Factory Radio — one-off ask/consult
 
 Use `refs/h5i/msg` to communicate with an **already-running interactive peer
 session**. This skill is the one-shot round-trip: ask a question, wait for the

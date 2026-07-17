@@ -1,11 +1,11 @@
 ---
 name: radio-setup
-description: Set up the h5i agent radio in the current repository for both Claude Code and Codex. Use when the user asks to "set up h5i radio", "install the radio pattern", "onboard this repo to h5i radio", "configure codex radio", or after installing the h5i-radio plugin and wanting a repo wired up. Runs preflight checks, `h5i init`, deploys the radio command/skill/prompt into .claude and .codex, sets the identity env + SessionEnd cleanup hook, and installs the Codex SessionStart prelude adapter. Idempotent and drift-protected.
+description: Set up the dark factory agent radio in the current repository for both Claude Code and Codex. Use when the user asks to "set up dark factory radio", "install the radio pattern", "onboard this repo to dark factory radio", "configure codex radio", or after installing the dark-factory plugin and wanting a repo wired up. Runs preflight checks, `h5i init`, deploys the radio command/skill/prompt into .claude and .codex, sets the identity env + SessionEnd cleanup hook, and installs the Codex SessionStart prelude adapter. Idempotent and drift-protected.
 ---
 
-# h5i radio — coordinated setup
+# dark factory radio — coordinated setup
 
-Onboard the **current git repository** to the h5i radio pattern for both runtimes.
+Onboard the **current git repository** to the dark factory radio pattern for both runtimes.
 Claude Code cannot install a plugin into Codex, so this deploys committed copies of
 the radio assets that Codex discovers, plus the identity env, the SessionEnd
 cleanup hook, and the Codex SessionStart prelude adapter (the afferent fix for the
@@ -18,8 +18,8 @@ explicit user confirmation.
 - `.claude/commands/radio.md` — `/radio` operator loop (Monitor-based)
 - `.claude/skills/radio-ask/**` and `.codex/skills/radio-ask/**` — the one-off `$radio-ask` skill
 - `.codex/prompts/radio.md` — Codex `/radio` operator loop (blocking wait)
-- `.h5i-radio/identity-lock.sh` — the identity lock helper (committed; both runtimes call it)
-- `.codex/hooks.json` + `.codex/hooks/h5i-codex-session-start.cjs` + `.codex/hooks/package.json` — Codex SessionStart prelude adapter
+- `.dark-factory/identity-lock.sh` — the identity lock helper (committed; both runtimes call it)
+- `.codex/hooks.json` + `.codex/hooks/dark-factory-codex-session-start.cjs` + `.codex/hooks/package.json` — Codex SessionStart prelude adapter
 - `.claude/settings.json` — merges `env.H5I_AGENT=claude` + a `SessionEnd` hook that releases the identity lock
 - runs `h5i init` — generates `.claude/h5i.md` + `AGENTS.md`
 
@@ -61,7 +61,7 @@ Relay the summary, then remind the user (the engine also prints these):
   hooks via Codex's `/hooks` so the SessionStart prelude runs.
 - **Commit the deployed files** — GSD-style resets discard uncommitted work, and
   Codex reads the committed `.codex/` copies:
-  `git add .claude .codex .h5i-radio AGENTS.md && git commit -m "chore: h5i radio setup"`
+  `git add .claude .codex .dark-factory AGENTS.md && git commit -m "chore: dark factory radio setup"`
 - Newly deployed hooks/skills load at **session start**, so restart the Claude
   session (or start Codex) to pick them up.
 - Enter radio with `/radio` (Claude) or the `radio` prompt (Codex); use a fresh
@@ -85,4 +85,4 @@ Relay the summary, then remind the user (the engine also prints these):
   `${CLAUDE_PLUGIN_ROOT}/codex/hooks.json`.
 - **Codex has no SessionEnd hook**, so its identity lock is released by the radio
   prompt at loop-exit, not automatically. A crashed Codex session can leave a
-  stale lock — clear it with `.h5i-radio/identity-lock.sh release <identity> --force`.
+  stale lock — clear it with `.dark-factory/identity-lock.sh release <identity> --force`.

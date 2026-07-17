@@ -1,4 +1,0 @@
-interface:
-  display_name: "h5i Radio (ask)"
-  short_description: "Ask a live peer agent through h5i radio and wait for the reply"
-  default_prompt: "Use $radio-ask to ask Claude a question and wait for the reply."

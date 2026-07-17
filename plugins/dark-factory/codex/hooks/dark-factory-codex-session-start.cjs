@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-// Codex SessionStart adapter for h5i.
+// Codex SessionStart adapter (dark factory).
 //
 // `h5i hook codex prelude` prints the current shared context (goal, branch,
 // milestones, recent trace) as plain text that BEGINS with "[" — which Codex

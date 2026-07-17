@@ -1,0 +1,4 @@
+interface:
+  display_name: "Dark Factory Radio (ask)"
+  short_description: "Ask a live peer agent through dark factory radio and wait for the reply"
+  default_prompt: "Use $radio-ask to ask Claude a question and wait for the reply."

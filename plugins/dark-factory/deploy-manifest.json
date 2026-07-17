@@ -41,14 +41,14 @@
       "id": "identity-lock",
       "type": "file",
       "source": "scripts/identity-lock.sh",
-      "dest": ".h5i-radio/identity-lock.sh",
+      "dest": ".dark-factory/identity-lock.sh",
       "executable": true
     },
     {
       "id": "codex-session-start-adapter",
       "type": "file",
-      "source": "codex/hooks/h5i-codex-session-start.cjs",
-      "dest": ".codex/hooks/h5i-codex-session-start.cjs",
+      "source": "codex/hooks/dark-factory-codex-session-start.cjs",
+      "dest": ".codex/hooks/dark-factory-codex-session-start.cjs",
       "executable": false
     },
     {
@@ -83,7 +83,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$(git rev-parse --show-toplevel)/.h5i-radio/identity-lock.sh\" release-hook"
+            "command": "bash \"$(git rev-parse --show-toplevel)/.dark-factory/identity-lock.sh\" release-hook"
           }
         ]
       }

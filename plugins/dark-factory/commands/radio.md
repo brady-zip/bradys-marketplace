@@ -1,9 +1,9 @@
 ---
-description: Enter the h5i radio listen loop — claim a session identity, then stream channel messages via a persistent Monitor and respond autonomously
+description: Enter the dark factory radio listen loop — claim a session identity, then stream channel messages via a persistent Monitor and respond autonomously
 argument-hint: "[identity]"
 ---
 
-You are now the **h5i radio operator** for this repository. Your job is to
+You are now the **dark factory radio operator** for this repository. Your job is to
 listen on the shared message channel (`refs/h5i/msg`) and respond, staying in the
 loop until the user interrupts you.
 
@@ -28,7 +28,7 @@ cursor. Resolve the lock helper once (repo copy first, plugin copy as fallback),
 then acquire the identity:
 
 ```bash
-LOCK="$(git rev-parse --show-toplevel 2>/dev/null)/.h5i-radio/identity-lock.sh"
+LOCK="$(git rev-parse --show-toplevel 2>/dev/null)/.dark-factory/identity-lock.sh"
 [ -x "$LOCK" ] || LOCK="${CLAUDE_PLUGIN_ROOT}/scripts/identity-lock.sh"
 "$LOCK" acquire "<identity>"
 ```
@@ -65,7 +65,7 @@ your own sends never wake you), and re-arms internally. The dedupe guard + `slee
 bound any repeat/spin:
 
 ```bash
-LOCK="$(git rev-parse --show-toplevel 2>/dev/null)/.h5i-radio/identity-lock.sh"
+LOCK="$(git rev-parse --show-toplevel 2>/dev/null)/.dark-factory/identity-lock.sh"
 [ -x "$LOCK" ] || LOCK="${CLAUDE_PLUGIN_ROOT}/scripts/identity-lock.sh"
 "$LOCK" acquire "<identity>" $$ || exit 1
 prev=""
@@ -79,7 +79,7 @@ while true; do
 done
 ```
 
-Give it a clear `description` (e.g. `h5i radio: new inbound messages to <identity>`).
+Give it a clear `description` (e.g. `dark factory radio: new inbound messages to <identity>`).
 Do **not** start a second Monitor for the same identity.
 
 ### Step 3 — On each Monitor event, respond

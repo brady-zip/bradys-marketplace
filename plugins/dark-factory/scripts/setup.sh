@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# setup.sh - coordinated, idempotent, project-scoped setup for the h5i radio
-# pattern. Deploys the radio assets into the CURRENT git repo for BOTH runtimes
+# setup.sh - coordinated, idempotent, project-scoped setup for the dark factory
+# radio pattern. Deploys the radio assets into the CURRENT git repo for BOTH runtimes
 # (Claude Code cannot install a plugin into Codex, so Codex needs the committed
 # copies), wires the identity env + SessionEnd cleanup into .claude/settings.json,
 # installs the Codex SessionStart prelude adapter, and runs `h5i init`.
@@ -194,7 +194,7 @@ info "1. Launch Codex with its identity:  ${BLUE}H5I_AGENT=codex codex${NC}"
 info "2. In Codex, trust project hooks via /hooks so the SessionStart prelude runs."
 info "3. ${BOLD}Commit${NC} the deployed files - GSD-style resets discard uncommitted work,"
 info "   and Codex reads the committed .codex/ copies:"
-info "     git add .claude .codex .h5i-radio AGENTS.md && git commit -m 'chore: h5i radio setup'"
+info "     git add .claude .codex .dark-factory AGENTS.md && git commit -m 'chore: dark factory radio setup'"
 info "4. Enter radio: ${BLUE}/radio${NC} (Claude) or the ${BLUE}radio${NC} prompt (Codex)."
 info "   Fresh identity: ${BLUE}/radio claude-roadmap${NC}. One live session per identity."
 exit 0
