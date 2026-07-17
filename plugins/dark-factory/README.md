@@ -86,6 +86,38 @@ Then: launch Codex as `H5I_AGENT=codex codex`, trust project hooks via Codex's
 `/hooks`, and **commit** the deployed files (GSD-style resets discard uncommitted
 work, and Codex reads the committed `.codex/` copies).
 
+## How to: spin up a new project
+
+End-to-end, from a fresh machine to an autonomous Codex build loop with a Claude
+operator on the radio:
+
+1. **Add the marketplace** (once per machine):
+   ```
+   /plugin marketplace add brady-zip/bradys-marketplace
+   ```
+2. **Install the plugin**:
+   ```
+   /plugin install dark-factory@bradys-marketplace
+   ```
+3. **Run setup in the target repo** — ask Claude to *"set up dark factory in this
+   repo"* (invokes the `radio-setup` skill), then **commit** the deployed `.claude/`
+   + `.codex/` files. See [Setup (per repo)](#setup-per-repo) for what it deploys.
+4. **Open the three terminals** — see [Typical session (3 terminals)](#typical-session-3-terminals)
+   below: `claude` → `/radio`, `H5I_AGENT=codex codex` → the radio prompt, and
+   `h5i msg watch --all --tui`.
+5. **Scaffold the project** — in the **Codex** terminal:
+   ```
+   $gsd-new-project
+   ```
+6. **Go autonomous** — then hand Codex the build loop, wired to the radio for
+   anything it needs to check:
+   ```
+   $gsd-autonomous use $radio-ask for any questions/clarification/discuss
+   ```
+   Codex works autonomously and pings the Claude operator over the radio
+   (`$radio-ask` → your `/radio` loop) whenever it needs a decision, clarification,
+   or a design discussion.
+
 ## Typical session (3 terminals)
 
 ```
