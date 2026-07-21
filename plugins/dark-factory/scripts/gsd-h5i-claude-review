@@ -1,0 +1,183 @@
+#!/usr/bin/env bash
+#
+# gsd-h5i-claude-review — GSD ship-gate code-review adapter that routes GSD's
+# external `workflow.code_review_command` through the dark factory radio to a
+# LIVE Claude peer running its official Anthropic code-review skill.
+#
+# GSD's ship workflow (see gsd-core workflows/ship.md) does, roughly:
+#
+#     REVIEW_PROMPT="You are reviewing a pull request.\n\nDiff stats:...\n
+#                    Phase context:...\nFull diff:...\nRespond with JSON:{...}"
+#     REVIEW_OUTPUT=$(echo "$REVIEW_PROMPT" | timeout 120 $REVIEW_CMD 2>logfile)
+#
+# so this adapter:
+#   1. reads GSD's review prompt on stdin,
+#   2. sends ONE fresh directed ASK to the live `claude` peer over h5i,
+#   3. records that ASK's id and waits for the reply CORRELATED to it,
+#   4. prints ONLY the review JSON on stdout: {verdict,confidence,summary,issues},
+#   5. logs to stderr and returns nonzero on timeout / malformed output.
+#
+# GSD wraps us in `timeout 120`, so the adapter's own deadline defaults to 110s
+# (below 120) to leave room to emit a clean error before GSD's SIGTERM.
+#
+# Config (all optional; env):
+#   GSD_H5I_REVIEW_FROM     self identity (default: $H5I_AGENT, else "codex")
+#   GSD_H5I_REVIEW_TO       peer identity (default: "claude") — the reviewer
+#   GSD_H5I_REVIEW_TIMEOUT  adapter deadline in seconds (default: 110; keep < 120)
+#   GSD_H5I_REVIEW_POLL     re-peek interval in seconds (default: 15)
+#   GSD_H5I_REVIEW_EFFORT   code-review effort passed to Claude: low|medium|high|
+#                           xhigh|max (default: unset -> Claude's own default)
+#   GSD_H5I_REVIEW_MAX_BODY max ASK body bytes before truncation (default: 100000)
+#
+# Exit codes: 0 ok · 2 usage/env · 3 timeout (no correlated reply) ·
+#             4 identity already consumed by another live session · 5 malformed reply
+#
+# CONSTRAINTS (by design):
+#   - Addresses `claude` specifically — never `all`, `codex`, or a generic agent.
+#   - NEVER fakes a review with `claude -p` / `codex exec` / `h5i env run`.
+#   - Correlates strictly on the transport-level `re #<ask-id>` back-reference,
+#     so unrelated inbox chatter is ignored (never trusts a stale historical ASK).
+#   - Guards single-consumer of the inbox via the dark-factory identity lock:
+#     if a live `/radio <self>` loop already holds the identity, it refuses
+#     (exit 4) rather than racing the shared read cursor.
+
+set -u
+
+PATH="$HOME/.local/bin:$PATH"
+
+log() { printf 'gsd-h5i-review: %s\n' "$*" >&2; }
+
+SELF="${GSD_H5I_REVIEW_FROM:-${H5I_AGENT:-codex}}"
+PEER="${GSD_H5I_REVIEW_TO:-claude}"
+DEADLINE="${GSD_H5I_REVIEW_TIMEOUT:-110}"
+POLL="${GSD_H5I_REVIEW_POLL:-15}"
+EFFORT="${GSD_H5I_REVIEW_EFFORT:-}"
+MAXB="${GSD_H5I_REVIEW_MAX_BODY:-100000}"
+
+command -v h5i >/dev/null 2>&1 || { log "h5i not on PATH — cannot reach the radio"; exit 2; }
+command -v jq  >/dev/null 2>&1 || { log "jq not on PATH — cannot validate the review JSON"; exit 2; }
+REPO="$(git rev-parse --show-toplevel 2>/dev/null)" || { log "not inside a git repository"; exit 2; }
+
+# --- single-consumer guard (best-effort) -------------------------------------
+LOCK="$REPO/.dark-factory/identity-lock.sh"
+[ -x "$LOCK" ] || LOCK="${CLAUDE_PLUGIN_ROOT:-}/scripts/identity-lock.sh"
+ACQUIRED="no"
+if [ -x "$LOCK" ]; then
+  if "$LOCK" acquire "$SELF" "$$" >&2; then
+    ACQUIRED="yes"
+  else
+    log "identity '$SELF' is already held by a live session (e.g. a /radio loop)."
+    log "stop that session, or set GSD_H5I_REVIEW_FROM to a dedicated identity (e.g. gsd-review)."
+    exit 4
+  fi
+else
+  log "warn: identity-lock helper not found; proceeding without the single-consumer guard."
+fi
+cleanup() { [ "$ACQUIRED" = "yes" ] && "$LOCK" release "$SELF" >/dev/null 2>&1 || true; }
+trap cleanup EXIT
+
+# --- read GSD's review prompt from stdin --------------------------------------
+PROMPT="$(cat)"
+[ -n "$PROMPT" ] || { log "empty review prompt on stdin"; exit 2; }
+
+BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
+EFFORT_CLAUSE=""
+[ -n "$EFFORT" ] && EFFORT_CLAUSE=" at ${EFFORT} effort"
+
+read -r -d '' PREAMBLE <<EOF || true
+GSD ship-gate code review request. Run your official Anthropic code-review skill${EFFORT_CLAUSE} over the change described below (branch: ${BRANCH}). Then reply to THIS ask over the radio with ONLY a single-line, minified JSON object and nothing else — no prose, no markdown, no code fences — of exactly this shape:
+{"verdict":"APPROVED" or "REVISE","confidence":0-100,"summary":"one-line assessment","issues":[{"severity":"Critical|Warning|Info","file":"path","line_range":"NN-MM","description":"...","suggestion":"..."}]}
+Use "REVISE" if any blocking (Critical/Warning) issue exists, otherwise "APPROVED". Keep it to one line.
+
+--- GSD REVIEW PROMPT FOLLOWS ---
+EOF
+
+BODY="${PREAMBLE}
+${PROMPT}"
+
+# Bound argv size: h5i takes the body as positional args, so a huge diff could
+# blow ARG_MAX. If oversized, keep the head and point Claude at the branch.
+if [ "${#BODY}" -gt "$MAXB" ]; then
+  log "review body ${#BODY} bytes > ${MAXB}; truncating and asking Claude to inspect branch '${BRANCH}' directly."
+  BODY="$(printf '%s' "$BODY" | head -c "$MAXB")
+[...truncated; review the full change on branch '${BRANCH}' (git diff against the base) in the shared repo...]"
+fi
+
+# --- send ONE fresh directed ASK ---------------------------------------------
+ASKOUT="$(h5i msg ask --from "$SELF" "$PEER" "$BODY" 2>&1)" || { log "h5i msg ask failed:"; printf '%s\n' "$ASKOUT" >&2; exit 2; }
+ASK_ID="$(printf '%s' "$ASKOUT" | sed -n 's/.*ASK \(#[0-9a-f][0-9a-f]*\).*/\1/p' | head -1)"
+[ -n "$ASK_ID" ] || { log "could not parse ASK id from send output:"; printf '%s\n' "$ASKOUT" >&2; exit 2; }
+log "sent ASK ${ASK_ID} from '${SELF}' to '${PEER}'; awaiting correlated reply (deadline ${DEADLINE}s)."
+
+# --- correlate the reply strictly to ASK_ID ----------------------------------
+# The recipient's NON-plain inbox --peek shows `<from> → <to>  ASK  #<reply> re #<ask>`.
+# --plain strips that back-reference, so we parse the non-plain view (ANSI removed)
+# and accept only a body whose header carries `re <ASK_ID>` from the peer. --peek
+# never advances the cursor, so we don't consume messages meant for others.
+strip_ansi() { sed $'s/\x1b\\[[0-9;]*[a-zA-Z]//g'; }
+
+extract_correlated_body() {
+  h5i msg inbox --as "$SELF" --peek 2>/dev/null | strip_ansi | awk -v id="$ASK_ID" -v peer="$PEER" '
+    function ishdr(l){ return (l ~ /^[[:space:]]*[0-9]+[[:space:]]+[0-9][0-9]:[0-9][0-9][[:space:]]/) }
+    {
+      if (ishdr($0)) {
+        if (cap) exit
+        if (index($0, "re " id) > 0 && index($0, peer) > 0) cap=1
+        next
+      }
+      if (cap) {
+        if ($0 ~ /^[[:space:]]*branch /) exit
+        line=$0; sub(/^[[:space:]]+/,"",line); sub(/[[:space:]]+$/,"",line)
+        if (line != "") body = (body=="" ? line : body "\n" line)
+      }
+    }
+    END { if (cap && body != "") print body; else exit 1 }
+  '
+}
+
+SECONDS=0
+REPLY_BODY=""
+while :; do
+  if REPLY_BODY="$(extract_correlated_body)" && [ -n "$REPLY_BODY" ]; then
+    break
+  fi
+  rem=$(( DEADLINE - SECONDS ))
+  if [ "$rem" -le 0 ]; then
+    log "timed out after ${DEADLINE}s with no reply correlated to ${ASK_ID}. Is the Claude /radio operator running?"
+    exit 3
+  fi
+  w="$rem"; [ "$w" -gt "$POLL" ] && w="$POLL"
+  # Block until a NEW inbound message wakes us, bounded so we re-peek even if we
+  # missed the edge (reply landing between send and wait).
+  h5i msg wait --as "$SELF" --timeout "$w" --plain >/dev/null 2>&1 || true
+done
+
+log "received correlated reply for ${ASK_ID} (${SECONDS}s)."
+
+# --- normalize + emit ONLY the review JSON on stdout -------------------------
+# Extract the first {...} span, validate it has a verdict, and re-emit compact
+# with the fields GSD reads (verdict uppercased so APPROVED/REVISE compare cleanly).
+CAND="$(printf '%s' "$REPLY_BODY" | awk '
+  { s = (NR==1 ? $0 : s "\n" $0) }
+  END {
+    a = index(s, "{"); if (a==0) exit 1
+    b = 0; for (i=length(s); i>=1; i--) if (substr(s,i,1)=="}") { b=i; break }
+    if (b==0 || b<a) exit 1
+    print substr(s, a, b-a+1)
+  }')" || { log "reply carried no JSON object:"; printf '%s\n' "$REPLY_BODY" >&2; exit 5; }
+
+OUT="$(printf '%s' "$CAND" | jq -ec '
+  if type=="object" and (has("verdict")) then
+    { verdict:    (.verdict | ascii_upcase),
+      confidence: (.confidence // 0),
+      summary:    (.summary // ""),
+      issues:     (.issues // []) }
+  else empty end
+' 2>/dev/null)" || true
+
+if [ -z "$OUT" ]; then
+  log "reply JSON was malformed or missing a verdict:"; printf '%s\n' "$CAND" >&2; exit 5
+fi
+
+printf '%s\n' "$OUT"
+exit 0

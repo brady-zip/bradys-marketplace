@@ -1,0 +1,4 @@
+interface:
+  display_name: "GSD Radio Code Review (Claude)"
+  short_description: "Ask the live Claude peer to review a GSD phase with its official code-review skill, then write the NN-REVIEW.md artifact"
+  default_prompt: "Use $gsd-h5i-code-review to have Claude review the current phase over the radio and write its NN-REVIEW.md."

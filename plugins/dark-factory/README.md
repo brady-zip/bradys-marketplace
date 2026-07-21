@@ -19,6 +19,8 @@ that lived independently in each repo.
 | `radio` **prompt** | Codex | `/radio` (project prompt) | Operator **listen loop** — blocking `h5i msg wait` poll (Codex has no Monitor). |
 | `radio-ask` **skill** | both | `$radio-ask` / by description | One-off **ask / consult** round-trip (ask → wait → reply once). |
 | `radio-review` **skill** | both (typically Codex → Claude) | `$radio-review` / by description | Ask the live **Claude** peer to run its **official Anthropic code-review skill** (effort + target area), then wait for and relay the findings. |
+| `gsd-h5i-code-review` **skill** | both (typically Codex → Claude) | `$gsd-h5i-code-review` / by description | GSD **phase** review over the radio: ask Claude to run its code-review skill, then write GSD's `{NN}-REVIEW.md` artifact from the reply. |
+| `gsd-h5i-claude-review` **adapter** | Codex (GSD `$gsd-ship`) | `workflow.code_review_command` | Ship-gate adapter: pipes GSD's review prompt to the live Claude peer over the radio and returns GSD's verdict JSON. |
 | `radio-setup` **skill** | Claude | by description | Coordinated per-repo setup for both runtimes. |
 
 ### Why the one-off skill is named `radio-ask` (not `radio`)
@@ -123,6 +125,60 @@ operator on the radio:
    Anthropic code-review skill (at a chosen effort over a chosen target area) and relays
    the findings back.
 
+## GSD integration — route code review to the live Claude peer
+
+GSD's built-in reviewer spawns a **Codex sub-agent**, and its `review.models.claude`
+path shells out to a **headless `claude -p`** — neither is your live Claude operator.
+These two surfaces route GSD's review to the **live `claude` peer** over the radio
+instead, so the same session that's on `/radio` does the review.
+
+**Occasional / phase reviews — the `gsd-h5i-code-review` skill.** No config needed. From
+Codex, invoke `$gsd-h5i-code-review` (or just ask it to "radio a review of phase 2 to
+Claude"). It sends a fresh directed ASK to `claude`, correlates the reply to that ASK id,
+and writes GSD's `{NN}-REVIEW.md` phase artifact from the findings. For a quick one-off
+with no artifact, `$radio-ask`/`$radio-review` also work.
+
+**Automatic review during `$gsd-ship` — the `gsd-h5i-claude-review` adapter.** Point GSD's
+external review command at the deployed adapter:
+
+```json
+{
+  "workflow": {
+    "code_review": true,
+    "code_review_depth": "standard",
+    "code_review_command": "./.dark-factory/gsd-h5i-claude-review"
+  }
+}
+```
+
+GSD's ship step pipes its review prompt (diff stats + phase context + full diff) to the
+command on stdin and expects JSON with a `verdict` on stdout. The adapter:
+
+1. reads that prompt from stdin,
+2. sends **one fresh** `h5i msg ask --from codex claude "…"` (never reuses a historical ASK),
+3. records the new ASK id and accepts **only** the reply correlated to it (via the
+   transport-level `re #<id>` back-reference — unrelated inbox chatter is ignored),
+4. prints only `{"verdict":"APPROVED"|"REVISE","confidence":…,"summary":…,"issues":[…]}`
+   on stdout — logs go to stderr, and it exits nonzero on timeout or malformed output
+   (which blocks the ship, the safe default).
+
+Tunable via env: `GSD_H5I_REVIEW_FROM` (self identity, default `$H5I_AGENT`/`codex`),
+`GSD_H5I_REVIEW_TO` (default `claude`), `GSD_H5I_REVIEW_TIMEOUT` (default `110`),
+`GSD_H5I_REVIEW_EFFORT` (`low`…`max`), `GSD_H5I_REVIEW_MAX_BODY`.
+
+Constraints to respect:
+
+- **Addresses `claude`, not `all`** — and never fakes the review with `claude -p` /
+  `codex exec` / `h5i env run`. A live Claude `/radio` operator must be listening, or the
+  adapter times out and blocks the ship.
+- **One consumer per inbox.** The adapter takes the dark-factory identity lock for its
+  identity; if a live `/radio codex` loop already holds it, the adapter refuses (exit 4)
+  rather than racing the shared read cursor. Set `GSD_H5I_REVIEW_FROM=gsd-review` to use a
+  dedicated review identity when a `codex` loop is running.
+- **120s ship budget.** GSD wraps the command in `timeout 120`; the adapter's own deadline
+  defaults to 110s so it can emit a clean error first. A deep review that won't fit needs a
+  larger `GSD_H5I_REVIEW_TIMEOUT` **and** a matching GSD-side timeout adjustment.
+
 ## Typical session (3 terminals)
 
 ```
@@ -151,7 +207,9 @@ Then from either agent: `h5i msg ask --from <self> <peer> "…"`.
 commands/radio.md              Claude operator loop (/radio)
 skills/radio-ask/SKILL.md      one-off ask/consult (+ agents/openai.yaml sidecar)
 skills/radio-review/SKILL.md   ask the Claude peer to code-review (+ agents/openai.yaml sidecar)
+skills/gsd-h5i-code-review/SKILL.md  GSD phase review over radio -> {NN}-REVIEW.md (+ sidecar)
 skills/radio-setup/SKILL.md    coordinated setup skill
+scripts/gsd-h5i-claude-review  GSD ship-gate adapter (code_review_command; deploys to .dark-factory/)
 hooks/hooks.json               plugin-level SessionEnd -> release-identity
 hooks/release-identity         SessionEnd cleanup script
 scripts/identity-lock.sh       identity lock library (shared, deployed to repos)
