@@ -18,6 +18,7 @@ behind explicit user confirmation.
 
 - `.claude/commands/radio.md` — `/radio` operator loop (Monitor-based)
 - `.claude/skills/radio-ask/**` and `.codex/skills/radio-ask/**` — the one-off `$radio-ask` skill
+- `.claude/skills/radio-review/**` and `.codex/skills/radio-review/**` — the `$radio-review` skill (ask the Claude peer to run its official code-review skill)
 - `.codex/prompts/radio.md` — Codex `/radio` operator loop (blocking wait)
 - `.dark-factory/identity-lock.sh` — the identity lock helper (committed; both runtimes call it)
 - `.codex/hooks/dark-factory-codex-session-start.cjs` + `.codex/hooks/package.json` — Codex SessionStart prelude adapter files
@@ -34,9 +35,11 @@ behind explicit user confirmation.
 bash "${CLAUDE_PLUGIN_ROOT}/scripts/setup.sh" --check
 ```
 
-This runs preflight (git, h5i, node, jq) and reports each item's status. Exit 3
-means work is pending. If preflight fails, surface exactly what's missing and stop
-— do not attempt to apply.
+This runs preflight (git, h5i, node, jq; plus optional npx and the Claude peer's
+official code-review skill that `$radio-review` depends on) and reports each item's
+status. Exit 3 means work is pending. If a **required** check fails, surface exactly
+what's missing and stop — do not attempt to apply. Optional checks only warn (a missing
+code-review skill just means `$radio-review` won't work until it's installed).
 
 ### 2. Apply
 

@@ -38,6 +38,27 @@
       "executable": false
     },
     {
+      "id": "claude-radio-review-skill",
+      "type": "file",
+      "source": "skills/radio-review/SKILL.md",
+      "dest": ".claude/skills/radio-review/SKILL.md",
+      "executable": false
+    },
+    {
+      "id": "codex-radio-review-skill",
+      "type": "file",
+      "source": "skills/radio-review/SKILL.md",
+      "dest": ".codex/skills/radio-review/SKILL.md",
+      "executable": false
+    },
+    {
+      "id": "codex-radio-review-openai",
+      "type": "file",
+      "source": "skills/radio-review/agents/openai.yaml",
+      "dest": ".codex/skills/radio-review/agents/openai.yaml",
+      "executable": false
+    },
+    {
       "id": "codex-radio-prompt",
       "type": "file",
       "source": "codex/prompts/radio.md",

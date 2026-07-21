@@ -18,6 +18,7 @@ that lived independently in each repo.
 | `radio` **command** | Claude | `/radio [identity]` | Operator **listen loop** — persistent Monitor streams inbound messages; you respond until stopped. |
 | `radio` **prompt** | Codex | `/radio` (project prompt) | Operator **listen loop** — blocking `h5i msg wait` poll (Codex has no Monitor). |
 | `radio-ask` **skill** | both | `$radio-ask` / by description | One-off **ask / consult** round-trip (ask → wait → reply once). |
+| `radio-review` **skill** | both (typically Codex → Claude) | `$radio-review` / by description | Ask the live **Claude** peer to run its **official Anthropic code-review skill** (effort + target area), then wait for and relay the findings. |
 | `radio-setup` **skill** | Claude | by description | Coordinated per-repo setup for both runtimes. |
 
 ### Why the one-off skill is named `radio-ask` (not `radio`)
@@ -74,7 +75,8 @@ bash "${CLAUDE_PLUGIN_ROOT}/scripts/setup.sh"
 ```
 
 or just ask Claude to "set up dark factory in this repo" (invokes the `radio-setup`
-skill). It runs preflight (git/h5i/node/jq/npx), `h5i init`, deploys the assets,
+skill). It runs preflight (git/h5i/node/jq/npx, plus an optional check that the Claude
+peer has the official Anthropic code-review skill that `$radio-review` drives), `h5i init`, deploys the assets,
 provisions **GSD (get-shit-done core)** for Codex (`npx … @opengsd/gsd-core` — pinned,
 idempotent, `--skip-gsd` to opt out), merges `env.H5I_AGENT=claude` + the SessionEnd
 cleanup hook into `.claude/settings.json`, and merges the Codex SessionStart prelude
@@ -116,7 +118,10 @@ operator on the radio:
    ```
    Codex works autonomously and pings the Claude operator over the radio
    (`$radio-ask` → your `/radio` loop) whenever it needs a decision, clarification,
-   or a design discussion.
+   or a design discussion. To get a second pair of eyes on what it just built, Codex
+   can also use **`$radio-review`** — that asks the Claude peer to run its official
+   Anthropic code-review skill (at a chosen effort over a chosen target area) and relays
+   the findings back.
 
 ## Typical session (3 terminals)
 
@@ -145,6 +150,7 @@ Then from either agent: `h5i msg ask --from <self> <peer> "…"`.
 .claude-plugin/plugin.json     manifest
 commands/radio.md              Claude operator loop (/radio)
 skills/radio-ask/SKILL.md      one-off ask/consult (+ agents/openai.yaml sidecar)
+skills/radio-review/SKILL.md   ask the Claude peer to code-review (+ agents/openai.yaml sidecar)
 skills/radio-setup/SKILL.md    coordinated setup skill
 hooks/hooks.json               plugin-level SessionEnd -> release-identity
 hooks/release-identity         SessionEnd cleanup script

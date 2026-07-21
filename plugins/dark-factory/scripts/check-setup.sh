@@ -9,6 +9,8 @@
 #   - node       (runs the Codex SessionStart adapter, a .cjs file)
 #   - jq         (setup.sh merges .claude/settings.json + .codex/hooks.json with jq)
 #   - npx        (optional; provisions GSD from its pinned npm package)
+#   - code-review (optional; the Claude peer's official Anthropic code-review
+#                  skill, which $radio-review asks it to run)
 #
 # Exits 0 if all required checks pass, 1 otherwise. Optional checks warn only.
 
@@ -62,6 +64,33 @@ if command -v npx >/dev/null 2>&1; then
   pass "npx found at $(command -v npx)"
 else
   fail_optional "npx not on PATH" "GSD (get-shit-done core) is provisioned via npx from a pinned npm package. Without npx, run setup with --skip-gsd (or install Node.js) — the rest of setup still proceeds."
+fi
+
+print_header "code-review skill (optional; enables \$radio-review for the Claude peer)"
+# $radio-review asks the live Claude peer to run its official Anthropic code-review
+# skill. Setup runs on the Claude peer's machine, so probe the local Claude config:
+# an install recorded in installed_plugins.json, a plugin cache/marketplace tree, or a
+# code-review command/skill on the user- or repo-level Claude paths.
+CR_PLUGINS="$HOME/.claude/plugins"
+CR_REPO="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+cr_found="no"
+if [ -f "$CR_PLUGINS/installed_plugins.json" ] && grep -q '"code-review@' "$CR_PLUGINS/installed_plugins.json" 2>/dev/null; then
+  cr_found="yes"
+elif [ -d "$CR_PLUGINS" ] && find "$CR_PLUGINS" -maxdepth 4 -type d -name code-review 2>/dev/null | grep -q .; then
+  cr_found="yes"
+else
+  for p in \
+    "$HOME/.claude/commands/code-review.md" \
+    "$HOME/.claude/skills/code-review/SKILL.md" \
+    ${CR_REPO:+"$CR_REPO/.claude/commands/code-review.md"} \
+    ${CR_REPO:+"$CR_REPO/.claude/skills/code-review/SKILL.md"}; do
+    if [ -f "$p" ]; then cr_found="yes"; break; fi
+  done
+fi
+if [ "$cr_found" = "yes" ]; then
+  pass "official Anthropic code-review skill available to the Claude peer"
+else
+  fail_optional "official Anthropic code-review skill not found for the Claude peer" "\$radio-review asks the Claude peer to run it. Install it: /plugin marketplace add anthropics/claude-plugins-official, then /plugin install code-review@claude-plugins-official. The rest of setup still proceeds."
 fi
 
 print_header "Summary"

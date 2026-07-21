@@ -1,0 +1,4 @@
+interface:
+  display_name: "Dark Factory Radio (review)"
+  short_description: "Ask the live Claude peer to code-review your changes with its official code-review skill and wait for the findings"
+  default_prompt: "Use $radio-review to have Claude code-review the current changes and wait for the findings."
