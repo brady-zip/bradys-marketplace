@@ -93,6 +93,30 @@ else
   fail_optional "official Anthropic code-review skill not found for the Claude peer" "\$radio-review asks the Claude peer to run it. Install it: /plugin marketplace add anthropics/claude-plugins-official, then /plugin install code-review@claude-plugins-official. The rest of setup still proceeds."
 fi
 
+print_header "sandbox writability (optional; agent Bash sandboxes can block .claude/commands/)"
+# Under an agent's Bash sandbox (e.g. macOS seatbelt in Claude Code), mkdir/cp into
+# .claude/commands/ can be denied even though a sibling like .claude/skills/ writes
+# fine - which makes the /radio command deploy fail. Probe the exact path here so
+# the operator learns about it up front instead of via a FAILED line mid-apply.
+# Probe non-destructively: create only what's missing, then remove exactly that.
+DF_REPO="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+if [ -n "$DF_REPO" ]; then
+  DF_CMD_DIR="$DF_REPO/.claude/commands"
+  DF_HAD_CLAUDE="no"; DF_HAD_CMD="no"
+  [ -d "$DF_REPO/.claude" ] && DF_HAD_CLAUDE="yes"
+  [ -d "$DF_CMD_DIR" ] && DF_HAD_CMD="yes"
+  DF_PROBE="$DF_CMD_DIR/.df-write-probe.$$"
+  if ( mkdir -p "$DF_CMD_DIR" && : > "$DF_PROBE" ) 2>/dev/null && [ -f "$DF_PROBE" ]; then
+    pass ".claude/commands/ is writable ($DF_CMD_DIR)"
+  else
+    fail_optional ".claude/commands/ is not writable from here" "An agent Bash sandbox (macOS seatbelt) may be blocking this path while .claude/skills/ writes fine - the /radio command deploy will FAIL for it. Recover by placing .claude/commands/radio.md via an editor or Claude Code's Write tool (goes through the permission path, not the Bash sandbox), or run setup in a plain, unsandboxed terminal."
+  fi
+  # Clean up: remove the probe and only the dirs this check itself created.
+  rm -f "$DF_PROBE" 2>/dev/null
+  [ "$DF_HAD_CMD" = "no" ] && rmdir "$DF_CMD_DIR" 2>/dev/null
+  [ "$DF_HAD_CLAUDE" = "no" ] && rmdir "$DF_REPO/.claude" 2>/dev/null
+fi
+
 print_header "Summary"
 if [ "$REQUIRED_FAILED" -eq 0 ] && [ "$OPTIONAL_FAILED" -eq 0 ]; then
   printf "${GREEN}All checks passed.${NC} dark-factory setup can proceed.\n"

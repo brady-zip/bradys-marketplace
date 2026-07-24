@@ -81,7 +81,10 @@ or just ask Claude to "set up dark factory in this repo" (invokes the `radio-set
 skill). It runs preflight (git/h5i/node/jq/npx, plus an optional check that the Claude
 peer has the official Anthropic code-review skill that `$radio-review` drives), `h5i init`, deploys the assets,
 provisions **GSD (get-shit-done core)** for Codex (`npx … @opengsd/gsd-core` — pinned,
-idempotent, `--skip-gsd` to opt out), merges `env.H5I_AGENT=claude` + the SessionEnd
+idempotent, `--skip-gsd` to opt out; forced **`--local`** so it installs into
+`<repo>/.codex` rather than a global `~/.codex`, with `GSD_INSTALLER_MIGRATION_RESOLVE=keep`
+so its first-time baseline scan doesn't block on dark-factory's own GSD-shaped skills),
+merges `env.H5I_AGENT=claude` + the SessionEnd
 cleanup hook into `.claude/settings.json`, and merges the Codex SessionStart prelude
 adapter (`.codex/hooks/dark-factory-codex-session-start.cjs` + a `{"type":"commonjs"}`
 boundary — the fix for h5i's `[`-leading prelude output being rejected as JSON) into

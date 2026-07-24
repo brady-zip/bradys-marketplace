@@ -26,7 +26,7 @@ behind explicit user confirmation.
 - `.dark-factory/identity-lock.sh` — the identity lock helper (committed; both runtimes call it)
 - `.codex/hooks/dark-factory-codex-session-start.cjs` + `.codex/hooks/package.json` — Codex SessionStart prelude adapter files
 - `.codex/hooks.json` — the adapter's SessionStart entry is **merged** in (created if absent, appended if GSD/another tool already owns it; never clobbered)
-- **GSD (get-shit-done core)** — provisioned via `npx -y --package=@opengsd/gsd-core@<pinned> -- gsd-core --codex --full`; skipped if `.codex/gsd-core` is already present
+- **GSD (get-shit-done core)** — provisioned via `GSD_INSTALLER_MIGRATION_RESOLVE=keep npx -y --package=@opengsd/gsd-core@<pinned> -- gsd-core --codex --local --profile=full` (**local** = into `<repo>/.codex`, never a global `~/.codex`); skipped if `.codex/gsd-core` is already present
 - `.claude/settings.json` — merges `env.H5I_AGENT=claude` + a `SessionEnd` hook that releases the identity lock
 - runs `h5i init` — generates `.claude/h5i.md` + `AGENTS.md`
 
@@ -99,6 +99,34 @@ Relay the summary, then remind the user (the engine also prints these):
   exists — and **non-fatal**: if `npx` is missing or the install fails, setup logs
   it and continues. GSD must be installed *before* the `.codex/hooks.json` merge
   (it owns that file); the engine orders these correctly. Use `--skip-gsd` to opt out.
+  Two things the engine forces so GSD works from inside an agent (learned the hard way):
+  - **Forced local, not global.** Under a non-interactive terminal — exactly how it
+    runs from within an agent — GSD's installer *defaults to a global install into
+    `~/.codex`*. That never creates the repo-local `.codex/gsd-core` marker (so
+    `--check` would report GSD pending forever) and, when `~/.codex` is sandbox-blocked
+    (macOS seatbelt gives EPERM on any write there, even with the sandbox disabled),
+    can't write at all. The engine passes `--local` so it targets `<repo>/.codex`,
+    which matches the marker and stays inside the writable repo.
+  - **Non-interactive baseline resolution.** The engine sets
+    `GSD_INSTALLER_MIGRATION_RESOLVE=keep`. Without it, GSD's first-time baseline scan
+    hard-blocks on dark-factory's *own* GSD-shaped assets (e.g.
+    `skills/gsd-h5i-code-review/agents/openai.yaml`, which its classifier flags
+    `stale-gsd-looking`) — and in a non-TTY run it **throws** instead of prompting, so
+    a cold user could pick "remove" and delete a radio asset. `keep` preserves them,
+    which is the correct call for files dark-factory deploys on purpose.
+  - **If GSD still can't complete from inside the agent**, finish it in a **plain,
+    unsandboxed terminal**: `cd <repo> && GSD_INSTALLER_MIGRATION_RESOLVE=keep npx -y
+    --package=@opengsd/gsd-core@<pinned> -- gsd-core --codex --local --profile=full`.
+    The rest of setup does not depend on it.
+- **`.claude/commands/` may be unwritable under an agent Bash sandbox.** On macOS,
+  Claude Code's seatbelt can deny `mkdir`/`cp` into `.claude/commands/` even though
+  `.claude/skills/` one level over writes fine — so every asset deploys except the
+  `/radio` command. `--check` now probes this path up front and warns; and if a copy
+  fails during apply, the engine reports it as **FAILED** (with the source path) and
+  exits non-zero instead of falsely claiming success. Recover by placing the failed
+  file (e.g. `.claude/commands/radio.md`) with an **editor or Claude Code's Write
+  tool** — those go through the permission path, not the Bash sandbox — or re-run
+  setup in a plain, unsandboxed terminal.
 - **Codex has no SessionEnd hook**, so its identity lock is released by the radio
   prompt at loop-exit, not automatically. A crashed Codex session can leave a
   stale lock — clear it with `.dark-factory/identity-lock.sh release <identity> --force`.

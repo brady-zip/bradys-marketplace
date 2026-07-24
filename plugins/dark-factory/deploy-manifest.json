@@ -5,7 +5,9 @@
     "package": "@opengsd/gsd-core",
     "version": "1.6.1",
     "runtime": "codex",
+    "location": "local",
     "scope": "full",
+    "migrationResolve": "keep",
     "presenceMarker": ".codex/gsd-core"
   },
   "objects": [

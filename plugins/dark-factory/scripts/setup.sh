@@ -17,8 +17,13 @@
 #
 # Everything is driven by deploy-manifest.json next to this script's parent.
 # The engine never rewrites unrelated settings.json / .codex/hooks.json keys,
-# backs each target up before any write, and writes atomically. GSD is installed
-# via `npx` from its pinned npm package and is skipped when already present.
+# backs each target up before any write, and writes atomically. Per-file status is
+# computed from the actual write outcome (not intent): a copy that does not land
+# (e.g. a sandbox-blocked path) is reported FAILED and gives a non-zero exit. GSD
+# is installed via `npx` from its pinned npm package, forced LOCAL (into <repo>/.codex,
+# never a global ~/.codex), non-interactively (GSD_INSTALLER_MIGRATION_RESOLVE=keep so
+# its baseline scan does not block on dark-factory's own GSD-shaped assets), and is
+# skipped when already present.
 
 set -u
 
@@ -59,7 +64,7 @@ SETTINGS_REL="$(jq -r '.settingsPath' "$MANIFEST")"
 SETTINGS="$REPO_ROOT/$SETTINGS_REL"
 
 PENDING=0
-CREATED=0; UPDATED=0; UNCHANGED=0; CONFLICT=0; SKIPPED=0
+CREATED=0; UPDATED=0; UNCHANGED=0; CONFLICT=0; SKIPPED=0; FAILED=0
 
 apply_enabled() { [ "$MODE" = "apply" ]; }
 
@@ -93,13 +98,28 @@ while IFS= read -r obj; do
     unchanged) info "${GREEN}unchanged${NC} $dest_rel"; UNCHANGED=$((UNCHANGED+1)) ;;
     create|update)
       PENDING=$((PENDING+1))
-      if [ "$action" = "create" ]; then CREATED=$((CREATED+1)); else UPDATED=$((UPDATED+1)); fi
       if apply_enabled; then
-        mkdir -p "$(dirname "$dest")"
-        cp "$src" "$dest"
-        [ "$executable" = "true" ] && chmod +x "$dest"
-        info "${GREEN}${action}d${NC} $dest_rel"
+        # Status is computed from OUTCOME, not intent. mkdir/cp can fail silently
+        # (e.g. an agent Bash sandbox / macOS seatbelt blocks .claude/commands/ even
+        # though a sibling like .claude/skills/ writes fine). Capture their stderr,
+        # check the exit status, and confirm the destination now matches the source
+        # byte-for-byte before counting it created/updated — otherwise mark FAILED so
+        # the summary and exit code reflect reality instead of claiming success.
+        werr="$( { mkdir -p "$(dirname "$dest")" && cp "$src" "$dest"; } 2>&1 )"
+        if [ $? -eq 0 ] && cmp -s "$src" "$dest"; then
+          [ "$executable" = "true" ] && chmod +x "$dest"
+          if [ "$action" = "create" ]; then CREATED=$((CREATED+1)); else UPDATED=$((UPDATED+1)); fi
+          info "${GREEN}${action}d${NC} $dest_rel"
+        else
+          FAILED=$((FAILED+1))
+          info "${RED}FAILED${NC}   $dest_rel (write did not land)"
+          [ -n "$werr" ] && info "         ${RED}${werr}${NC}"
+          info "         source: ${src#$PLUGIN_ROOT/}"
+          info "         this path may be blocked by an agent's Bash sandbox (macOS seatbelt);"
+          info "         place the file by hand (editor / Claude Code Write tool), or re-run in a plain terminal."
+        fi
       else
+        if [ "$action" = "create" ]; then CREATED=$((CREATED+1)); else UPDATED=$((UPDATED+1)); fi
         info "${YELLOW}would-${action}${NC} $dest_rel"
       fi ;;
     skip-noclobber)
@@ -120,9 +140,23 @@ say "\n${BOLD}GSD (get-shit-done core)${NC}"
 GSD_PKG="$(jq -r '.gsd.package // empty' "$MANIFEST")"
 GSD_VER="$(jq -r '.gsd.version // empty' "$MANIFEST")"
 GSD_RUNTIME="$(jq -r '.gsd.runtime // "codex"' "$MANIFEST")"
-GSD_SCOPE="$(jq -r '.gsd.scope // "core"' "$MANIFEST")"
+GSD_LOCATION="$(jq -r '.gsd.location // "local"' "$MANIFEST")"
+GSD_PROFILE="$(jq -r '.gsd.scope // "full"' "$MANIFEST")"
+GSD_MIGRATION_RESOLVE="$(jq -r '.gsd.migrationResolve // "keep"' "$MANIFEST")"
 GSD_MARKER="$(jq -r '.gsd.presenceMarker // ".codex/gsd-core"' "$MANIFEST")"
 GSD_SPEC="${GSD_PKG}@${GSD_VER}"
+# Install into the PROJECT, not globally. Left to its own devices under a
+# non-interactive terminal (which is exactly how it runs from inside an agent),
+# GSD's installer defaults to a *global* install into ~/.codex - which never
+# creates the repo-local marker (so --check would report GSD pending forever) and,
+# on a seatbelt-sandboxed ~/.codex, cannot write at all. `--local` targets
+# <repo>/.codex, matching GSD_MARKER (.codex/gsd-core) and staying inside the repo.
+# GSD_INSTALLER_MIGRATION_RESOLVE=keep resolves GSD's first-time baseline scan
+# non-interactively: it would otherwise hard-block on dark-factory's own
+# GSD-shaped assets (e.g. skills/gsd-h5i-code-review/agents/openai.yaml, which
+# GSD's classifier flags "stale-gsd-looking" and, in a non-TTY run, throws on
+# instead of prompting). `keep` = preserve those files on disk = the correct call.
+GSD_ARGS=(--"$GSD_RUNTIME" --"$GSD_LOCATION" --profile="$GSD_PROFILE")
 if [ "$RUN_GSD" = "no" ]; then
   info "skipped (--skip-gsd)"
 elif [ -z "$GSD_PKG" ] || [ -z "$GSD_VER" ]; then
@@ -132,14 +166,14 @@ elif [ -e "$REPO_ROOT/$GSD_MARKER" ]; then
 elif ! command -v npx >/dev/null 2>&1; then
   info "${RED}npx not found${NC} - cannot provision GSD (install Node.js); continuing"
 elif [ "$MODE" != "apply" ]; then
-  info "${YELLOW}would run${NC} npx -y --package=$GSD_SPEC -- gsd-core --$GSD_RUNTIME --$GSD_SCOPE"
+  info "${YELLOW}would run${NC} GSD_INSTALLER_MIGRATION_RESOLVE=$GSD_MIGRATION_RESOLVE npx -y --package=$GSD_SPEC -- gsd-core ${GSD_ARGS[*]}"
   PENDING=$((PENDING+1))
 else
-  info "provisioning via npx (pulls $GSD_SPEC; may hit the network / prompt)..."
-  if ( cd "$REPO_ROOT" && npx -y --package="$GSD_SPEC" -- gsd-core --"$GSD_RUNTIME" --"$GSD_SCOPE" ); then
-    info "${GREEN}provisioned${NC} GSD --$GSD_RUNTIME --$GSD_SCOPE"
+  info "provisioning locally (into ./$GSD_MARKER) via npx (pulls $GSD_SPEC; may hit the network)..."
+  if ( cd "$REPO_ROOT" && GSD_INSTALLER_MIGRATION_RESOLVE="$GSD_MIGRATION_RESOLVE" npx -y --package="$GSD_SPEC" -- gsd-core "${GSD_ARGS[@]}" ); then
+    info "${GREEN}provisioned${NC} GSD ${GSD_ARGS[*]}"
   else
-    info "${RED}GSD install failed${NC} (continuing; run it manually if needed)"
+    info "${RED}GSD install failed${NC} (continuing; run it manually in a plain terminal if needed)"
   fi
 fi
 
@@ -184,8 +218,13 @@ while IFS= read -r frag; do
         backup="$dest.bak.$(date +%s)"; cp "$dest" "$backup"; info "backup: ${backup#$REPO_ROOT/}"
       fi
       tmp="$dest.tmp.$$"
-      printf '%s\n' "$work" | jq . > "$tmp" && mv "$tmp" "$dest"
-      info "${GREEN}merged${NC} SessionStart adapter into $dest_rel"
+      if { printf '%s\n' "$work" | jq . > "$tmp"; } 2>/dev/null && mv "$tmp" "$dest" 2>/dev/null; then
+        info "${GREEN}merged${NC} SessionStart adapter into $dest_rel"
+      else
+        rm -f "$tmp" 2>/dev/null
+        FAILED=$((FAILED+1))
+        info "${RED}FAILED${NC}   $dest_rel (could not write merged hooks - path may be sandbox-blocked)"
+      fi
     else
       info "${YELLOW}would-merge${NC} SessionStart adapter into $dest_rel"
     fi
@@ -236,8 +275,13 @@ else
       info "backup: ${backup#$REPO_ROOT/}"
     fi
     tmp="$SETTINGS.tmp.$$"
-    printf '%s\n' "$work" | jq . > "$tmp" && mv "$tmp" "$SETTINGS"
-    info "${GREEN}updated${NC} env.H5I_AGENT=claude + SessionEnd release hook"
+    if { printf '%s\n' "$work" | jq . > "$tmp"; } 2>/dev/null && mv "$tmp" "$SETTINGS" 2>/dev/null; then
+      info "${GREEN}updated${NC} env.H5I_AGENT=claude + SessionEnd release hook"
+    else
+      rm -f "$tmp" 2>/dev/null
+      FAILED=$((FAILED+1))
+      info "${RED}FAILED${NC}   $SETTINGS_REL (could not write settings - path may be sandbox-blocked)"
+    fi
   else
     info "${YELLOW}would-update${NC} env.H5I_AGENT=claude + SessionEnd release hook"
   fi
@@ -263,13 +307,20 @@ fi
 
 # --- summary -----------------------------------------------------------------
 say "\n${BOLD}Summary${NC}"
-say "  files: ${CREATED} created, ${UPDATED} updated, ${UNCHANGED} unchanged, ${SKIPPED} skipped, ${CONFLICT} conflict"
+say "  files: ${CREATED} created, ${UPDATED} updated, ${UNCHANGED} unchanged, ${SKIPPED} skipped, ${CONFLICT} conflict, ${FAILED} failed"
 if [ "$MODE" = "check" ]; then
   if [ "$PENDING" -gt 0 ]; then say "  ${YELLOW}${PENDING} item(s) pending${NC} - run setup to apply"; exit 3; fi
   say "  ${GREEN}up to date${NC}"; exit 0
 fi
 if [ "$MODE" = "dry-run" ]; then
   say "  dry run - nothing written (${PENDING} item(s) would change)"; exit 0
+fi
+if [ "$FAILED" -gt 0 ]; then
+  say "  ${RED}${FAILED} file(s) failed to write${NC} - the deploy is INCOMPLETE (see the FAILED line(s) above)."
+  say "  A common cause is an agent Bash sandbox blocking a path such as .claude/commands/ (while"
+  say "  .claude/skills/ writes fine). Place the failed file(s) by hand, or re-run this setup in a"
+  say "  plain, unsandboxed terminal. Not printing 'Next steps' - setup did not complete cleanly."
+  exit 1
 fi
 if [ "$CONFLICT" -gt 0 ]; then
   say "  ${RED}${CONFLICT} conflict(s)${NC} not applied - re-run with --force after reviewing"; exit 1
