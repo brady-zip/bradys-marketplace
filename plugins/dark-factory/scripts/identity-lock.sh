@@ -18,7 +18,13 @@
 #     identity forever. There is no heartbeat and no time-based expiry.
 #
 # Lock file:    <git-dir>/dark-factory/locks/<identity>.lock
-#   TSV line:   <session_id>\t<pid>\t<host>\t<epoch>
+#   One line, US-delimited (0x1F):  <session_id><US><pid><US><host><US><epoch>
+#   The delimiter is deliberately NON-whitespace. `read` trims leading and
+#   collapses runs of IFS *whitespace* (tabs included), so an empty session or pid
+#   field written with a tab delimiter shifted every later field left (host<-session,
+#   epoch<-pid) and left host empty -> pid_alive() then assumed "alive on another
+#   host" and a session refused its own re-acquire. The US byte cannot appear in a
+#   session id / pid / hostname / epoch, so empty fields round-trip intact.
 # Session map:  <git-dir>/dark-factory/sessions/<session_id>  -> contains <identity>
 #   (lets the session-end hook, which only knows session_id, find the identity
 #    to release.)
@@ -34,14 +40,30 @@
 #                                               #   stdin (SessionEnd hook)
 #   identity-lock.sh status
 #
-# Identity/session resolution: session_id defaults to $CLAUDE_SESSION_ID (empty
-# if unset). Always pass identity explicitly - the h5i stored default is
-# intentionally untrusted in shared clones.
+# Identity/session resolution: session_id prefers $CLAUDE_SESSION_ID and falls back
+# to a non-empty per-session token when it is unset (see SELF_SESSION below). Always
+# pass identity explicitly - the h5i stored default is intentionally untrusted in
+# shared clones.
 
 set -u
 
-SELF_SESSION="${CLAUDE_SESSION_ID:-}"
 HOSTN="$(hostname 2>/dev/null || echo unknown)"
+
+# Field delimiter for the lock line: the ASCII Unit Separator (0x1F). It MUST be a
+# non-whitespace byte so `read` preserves empty leading/middle fields instead of
+# collapsing them (see the header note).
+US=$'\037'
+
+# Session identity. Prefer Claude Code's real session id; when it is unset (older
+# Claude, Codex, or a manual invocation) fall back to a non-empty token. The fallback
+# must never be empty: an empty owner (a) aliased every id-less session to the same
+# "" owner, so one session's "already ours" check matched another's lock and stole it,
+# and (b) suppressed the session-map entry (guarded on non-empty), silently breaking
+# the SessionEnd auto-release. PPID - the harness/CLI process that spawns each
+# invocation within one session - is stable across a session's calls and distinct
+# across concurrent sessions, which is exactly what the owner field needs.
+SELF_SESSION="${CLAUDE_SESSION_ID:-}"
+[ -n "$SELF_SESSION" ] || SELF_SESSION="anon-${PPID:-$$}@${HOSTN}"
 
 die() { printf 'identity-lock: %s\n' "$1" >&2; exit "${2:-1}"; }
 
@@ -73,7 +95,7 @@ cmd_acquire() {
 
   if [ -f "$lockfile" ]; then
     local o_sess o_pid o_host o_epoch
-    IFS=$'\t' read -r o_sess o_pid o_host o_epoch < "$lockfile" || true
+    IFS="$US" read -r o_sess o_pid o_host o_epoch < "$lockfile" || true
     if [ "$o_sess" = "$SELF_SESSION" ]; then
       : # already ours - fall through to refresh (updates pid if now provided)
     elif pid_alive "$o_pid" "$o_host"; then
@@ -92,7 +114,7 @@ cmd_acquire() {
     # else: stale (recorded pid dead on this host) -> reclaim
   fi
 
-  printf '%s\t%s\t%s\t%s\n' "$SELF_SESSION" "$pid" "$HOSTN" "$(date +%s)" > "$lockfile"
+  printf '%s%s%s%s%s%s%s\n' "$SELF_SESSION" "$US" "$pid" "$US" "$HOSTN" "$US" "$(date +%s)" > "$lockfile"
   [ -n "$SELF_SESSION" ] && printf '%s\n' "$identity" > "$sessdir/$SELF_SESSION"
   printf 'identity "%s" acquired\n' "$identity"
 }
@@ -106,7 +128,7 @@ remove_lock() {
   [ -f "$lockfile" ] || return 0
   if [ "$force" != "force" ]; then
     local o_sess
-    IFS=$'\t' read -r o_sess _ _ _ < "$lockfile" || true
+    IFS="$US" read -r o_sess _ _ _ < "$lockfile" || true
     if [ "$o_sess" != "$SELF_SESSION" ]; then
       printf 'identity "%s" is held by another session (%s); pass --force to clear\n' "$identity" "${o_sess:-<none>}" >&2
       return 1
@@ -183,7 +205,7 @@ cmd_status() {
   for f in "$lockdir"/*.lock; do
     [ -e "$f" ] || continue
     identity="$(basename "$f" .lock)"
-    IFS=$'\t' read -r o_sess o_pid o_host o_epoch < "$f" || true
+    IFS="$US" read -r o_sess o_pid o_host o_epoch < "$f" || true
     if pid_alive "$o_pid" "$o_host"; then live="yes"; else live="no/unknown"; fi
     if [ -n "${o_epoch:-}" ]; then age="$(( $(date +%s) - o_epoch ))s"; else age="?"; fi
     printf '%-18s %-18s %-9s %-12s %-7s %s\n' \
