@@ -5,5 +5,5 @@
   },
   "description": "dark factory agent radio - live peer messaging between an interactive Claude Code and Codex session over refs/h5i/msg, with per-session identity locking and a coordinated dual-runtime setup skill",
   "name": "dark-factory",
-  "version": "260716.0"
+  "version": "260723.0"
 }
