@@ -19,6 +19,7 @@ behind explicit user confirmation.
 - `.claude/commands/radio.md` — `/radio` operator loop (Monitor-based)
 - `.claude/skills/radio-ask/**` and `.codex/skills/radio-ask/**` — the one-off `$radio-ask` skill
 - `.claude/skills/radio-review/**` and `.codex/skills/radio-review/**` — the `$radio-review` skill (ask the Claude peer to run its official code-review skill)
+- `.claude/skills/radio-knowledge/**` — the `$radio-knowledge` skill (Claude-private decision-support knowledge base under `.claude/`; **Claude only**, Codex never sees it)
 - `.claude/skills/gsd-h5i-code-review/**` and `.codex/skills/gsd-h5i-code-review/**` — the `$gsd-h5i-code-review` skill (GSD phase review over radio → `{NN}-REVIEW.md`)
 - `.dark-factory/gsd-h5i-claude-review` — GSD ship-gate adapter for `workflow.code_review_command` (routes `$gsd-ship` review to the live Claude peer)
 - `.codex/prompts/radio.md` — Codex `/radio` operator loop (blocking wait)

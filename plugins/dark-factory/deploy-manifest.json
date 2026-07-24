@@ -59,6 +59,13 @@
       "executable": false
     },
     {
+      "id": "claude-radio-knowledge-skill",
+      "type": "file",
+      "source": "skills/radio-knowledge/SKILL.md",
+      "dest": ".claude/skills/radio-knowledge/SKILL.md",
+      "executable": false
+    },
+    {
       "id": "codex-radio-prompt",
       "type": "file",
       "source": "codex/prompts/radio.md",

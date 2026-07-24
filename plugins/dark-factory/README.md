@@ -19,6 +19,7 @@ that lived independently in each repo.
 | `radio` **prompt** | Codex | `/radio` (project prompt) | Operator **listen loop** — blocking `h5i msg wait` poll (Codex has no Monitor). |
 | `radio-ask` **skill** | both | `$radio-ask` / by description | One-off **ask / consult** round-trip (ask → wait → reply once). |
 | `radio-review` **skill** | both (typically Codex → Claude) | `$radio-review` / by description | Ask the live **Claude** peer to run its **official Anthropic code-review skill** (effort + target area), then wait for and relay the findings. |
+| `radio-knowledge` **skill** | **Claude only** | `$radio-knowledge` / by description | Maintain a **Claude-private** knowledge base under `.claude/` (glossary, conventions, decisions) — the operator looks it up before answering the Codex peer and synthesizes durable decisions back. Codex never sees it. |
 | `gsd-h5i-code-review` **skill** | both (typically Codex → Claude) | `$gsd-h5i-code-review` / by description | GSD **phase** review over the radio: ask Claude to run its code-review skill, then write GSD's `{NN}-REVIEW.md` artifact from the reply. |
 | `gsd-h5i-claude-review` **adapter** | Codex (GSD `$gsd-ship`) | `workflow.code_review_command` | Ship-gate adapter: pipes GSD's review prompt to the live Claude peer over the radio and returns GSD's verdict JSON. |
 | `radio-setup` **skill** | Claude | by description | Coordinated per-repo setup for both runtimes. |
@@ -179,6 +180,30 @@ Constraints to respect:
   defaults to 110s so it can emit a clean error first. A deep review that won't fit needs a
   larger `GSD_H5I_REVIEW_TIMEOUT` **and** a matching GSD-side timeout adjustment.
 
+## Knowledge base — a Claude-private memory for the radio operator
+
+The `radio-knowledge` skill gives the Claude `/radio` operator a persistent,
+**Claude-only** knowledge base so it answers the Codex peer faster and more
+consistently over time. Modeled on the grill-with-docs / domain-modeling context
+structure, it lives under `.claude/dark-factory/kb/` — which the **Codex runtime
+never loads** (Codex reads `.codex/`), so it stays private to Claude even though it
+is committed with the repo.
+
+```
+.claude/dark-factory/kb/
+  CONTEXT.md         glossary of canonical project/domain terms
+  conventions.md     recurring rules the operator applies
+  decisions/         ADR-style records (NNNN-slug.md) for hard-to-reverse calls
+```
+
+The operator's cycle on each substantive ask: **look up** the knowledge base →
+**formulate** an answer grounded in the KB plus the live code → **synthesize** any
+durable decision back. Files are created on demand (nothing is scaffolded empty),
+**only Claude's skill is deployed** (no `.codex/` copy, no `openai.yaml` sidecar),
+and the KB is never transmitted over the radio — it informs answers, it is not a
+channel. On a conflict, current code and the user always win over the KB. Gitignore
+`.claude/dark-factory/kb/` if you would rather keep it local instead of committed.
+
 ## Typical session (3 terminals)
 
 ```
@@ -207,6 +232,7 @@ Then from either agent: `h5i msg ask --from <self> <peer> "…"`.
 commands/radio.md              Claude operator loop (/radio)
 skills/radio-ask/SKILL.md      one-off ask/consult (+ agents/openai.yaml sidecar)
 skills/radio-review/SKILL.md   ask the Claude peer to code-review (+ agents/openai.yaml sidecar)
+skills/radio-knowledge/SKILL.md  Claude-private decision-support KB (deploys to .claude/ only; no Codex copy)
 skills/gsd-h5i-code-review/SKILL.md  GSD phase review over radio -> {NN}-REVIEW.md (+ sidecar)
 skills/radio-setup/SKILL.md    coordinated setup skill
 scripts/gsd-h5i-claude-review  GSD ship-gate adapter (code_review_command; deploys to .dark-factory/)
