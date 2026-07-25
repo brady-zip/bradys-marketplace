@@ -50,9 +50,12 @@ TEMPLATES="${SCRIPT_DIR}/templates"
 # Resolves for both `--plugin-dir` local iteration and the marketplace cache
 # path (~/.claude/plugins/cache/bradys-marketplace/mem0-brady/<version>/server).
 SERVER_DIR="$(cd "${SCRIPT_DIR}/../server" && pwd)"
-CONFIG_DIR="${HOME}/.config/mem0-brady"
-ENV_FILE="${CONFIG_DIR}/.env"
-DATA_DIR="${HOME}/.local/share/mem0-brady"
+# Overridable so the config can be relocated, and so the installer is testable
+# without writing to a real home. doctor.sh / migrate.sh / the hooks already
+# honor MEM0_BRADY_ENV; setup was the one place that didn't.
+CONFIG_DIR="${MEM0_BRADY_CONFIG_DIR:-${HOME}/.config/mem0-brady}"
+ENV_FILE="${MEM0_BRADY_ENV:-${CONFIG_DIR}/.env}"
+DATA_DIR="${MEM0_BRADY_DATA_DIR:-${HOME}/.local/share/mem0-brady}"
 QDRANT_BIN_DIR="${DATA_DIR}/bin"
 QDRANT_BIN="${QDRANT_BIN_DIR}/qdrant"
 QDRANT_STORAGE="${DATA_DIR}/qdrant-storage"

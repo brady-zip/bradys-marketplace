@@ -29,9 +29,11 @@ GREEN='\033[0;32m'; RED='\033[0;31m'; YELLOW='\033[0;33m'; BLUE='\033[0;34m'; BO
 REQUIRED_FAILED=0
 OPTIONAL_FAILED=0
 
-CONFIG_DIR="${HOME}/.config/mem0-brady"
-ENV_FILE="${CONFIG_DIR}/.env"
-DATA_DIR="${HOME}/.local/share/mem0-brady"
+# Same overrides setup.sh, migrate.sh and the hooks honor, so all of them can be
+# pointed at one relocated (or test) config instead of drifting apart.
+CONFIG_DIR="${MEM0_BRADY_CONFIG_DIR:-${HOME}/.config/mem0-brady}"
+ENV_FILE="${MEM0_BRADY_ENV:-${CONFIG_DIR}/.env}"
+DATA_DIR="${MEM0_BRADY_DATA_DIR:-${HOME}/.local/share/mem0-brady}"
 QDRANT_BIN="${DATA_DIR}/bin/qdrant"
 QDRANT_STORAGE="${DATA_DIR}/qdrant-storage"
 QDRANT_LABEL="com.mem0brady.qdrant"
