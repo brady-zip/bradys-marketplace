@@ -10,14 +10,25 @@
 #
 # This script verifies:
 #   - curl / jq are available (used by this check and by skill workflows)
-#   - the mem0 MCP server is reachable on http://127.0.0.1:8788/mcp
+#   - the mem0 MCP server is reachable
 #   - a `mem0` MCP server is registered with the Claude client
-#   - the backing Qdrant vector store on http://127.0.0.1:6333 (optional, info only)
+#   - the backing Qdrant vector store (optional, info only)
+#
+# URLs come from this install's config (~/.config/mem0-brady/.env), not from
+# defaults baked into the plugin, so a machine pointed at its own stack is
+# checked against its own endpoints. MEM0_MCP_URL / QDRANT_URL still override.
 #
 # Exits 0 if all required checks pass, 1 otherwise. Optional checks never fail
 # the script but print remediation hints.
 
 set -u
+
+ENV_FILE="${MEM0_BRADY_ENV:-$HOME/.config/mem0-brady/.env}"
+# Read a KEY without sourcing the file (it holds the OpenAI key).
+env_get() {
+  [ -f "$ENV_FILE" ] || return 0
+  grep -E "^${1}=" "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true
+}
 
 GREEN='\033[0;32m'
 RED='\033[0;31m'
@@ -29,8 +40,13 @@ NC='\033[0m'
 REQUIRED_FAILED=0
 OPTIONAL_FAILED=0
 
+MEM0_MCP_URL="${MEM0_MCP_URL:-$(env_get MEM0_BRADY_MCP_URL)}"
 MEM0_MCP_URL="${MEM0_MCP_URL:-http://127.0.0.1:8788/mcp}"
+QDRANT_URL="${QDRANT_URL:-$(env_get MEM0_QDRANT_URL)}"
 QDRANT_URL="${QDRANT_URL:-http://127.0.0.1:6333}"
+# The port a `claude mcp list` entry must mention to count as "our" server.
+MEM0_MCP_PORT="$(printf '%s' "$MEM0_MCP_URL" | sed -nE 's|.*:([0-9]+).*|\1|p')"
+MEM0_MCP_PORT="${MEM0_MCP_PORT:-8788}"
 
 print_header() {
   printf "\n${BOLD}%s${NC}\n" "$1"
@@ -95,7 +111,7 @@ if [ "$MCP_CODE" != "000" ]; then
 else
   fail_required \
     "mem0 MCP server not reachable at ${MEM0_MCP_URL}" \
-    "Run /mem0-brady:setup to install the vendored mem0 MCP server (plugin ../server) and boot its launchd agent + native Qdrant, then /mem0-brady:doctor to verify. Override the URL with MEM0_MCP_URL if you run it elsewhere."
+    "Run /mem0-brady:setup, then /mem0-brady:doctor to verify. On a managed stack that installs and boots the MCP server for you; on an external stack, start your own. Override the URL with MEM0_MCP_URL."
 fi
 
 # --- mem0 MCP server registered with the Claude client ------------------------
@@ -107,14 +123,15 @@ print_header "mem0 MCP registration (required)"
 REGISTERED=0
 if command -v claude >/dev/null 2>&1; then
   MCP_LIST="$(claude mcp list 2>/dev/null || true)"
-  if printf '%s' "$MCP_LIST" | grep -qiE 'mem0|8788'; then
+  if printf '%s' "$MCP_LIST" | grep -qiE "mem0|${MEM0_MCP_PORT}"; then
     pass "A mem0 MCP server appears registered with the Claude CLI"
-    printf '%s\n' "$MCP_LIST" | grep -iE 'mem0|8788' | sed 's/^/            /'
+    printf '%s\n' "$MCP_LIST" | grep -iE "mem0|${MEM0_MCP_PORT}" | sed 's/^/            /'
     REGISTERED=1
   fi
 fi
 if [ "$REGISTERED" -eq 0 ] && [ -f "$HOME/.claude.json" ]; then
-  if jq -e '.mcpServers // {} | to_entries[] | select((.key|test("mem0";"i")) or ((.value.url // "")|test("8788")))' \
+  if jq -e --arg port "$MEM0_MCP_PORT" \
+      '.mcpServers // {} | to_entries[] | select((.key|test("mem0";"i")) or ((.value.url // "")|test($port)))' \
       "$HOME/.claude.json" >/dev/null 2>&1; then
     pass "A mem0 MCP server is registered in ~/.claude.json"
     REGISTERED=1

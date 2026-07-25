@@ -2,15 +2,24 @@
 #
 # Health check for the mem0-brady plugin. Run via /mem0-brady:doctor.
 #
-# Verifies the full local stack:
+# Verifies the stack this install actually runs. Everything it checks — URLs,
+# collection, user_id, ports — comes from ~/.config/mem0-brady/.env, so a
+# machine that points at its own store is checked against ITS values, not
+# against defaults baked into the plugin.
+#
 #   - macOS (launchd)
 #   - uv + the fork's console scripts on PATH
-#   - the native qdrant binary
 #   - the single config file (~/.config/mem0-brady/.env) exists + has a key
-#   - both launchd agents loaded (com.mem0brady.qdrant, com.mem0brady.server)
-#   - the Qdrant server answers on :6433 and the MCP server on :8788
-#   - the Qdrant storage dir is present + writable
+#   - the Qdrant server answers, and holds a collection matching this config
+#   - the MCP server answers
 #   - (optional) workstream dirs + any active workstream tags
+#
+# Managed stack only (MEM0_BRADY_STACK=managed, the default):
+#   - the native qdrant binary
+#   - both launchd agents loaded (com.mem0brady.qdrant, com.mem0brady.server)
+#   - the Qdrant storage dir is present + writable
+# Under MEM0_BRADY_STACK=external those three are skipped — you run Qdrant and
+# the MCP server yourself, so the plugin owns no binary, agent, or storage dir.
 #
 # Exits 0 if all required checks pass, 1 otherwise. Optional checks warn but
 # never fail the run.
@@ -27,9 +36,26 @@ QDRANT_BIN="${DATA_DIR}/bin/qdrant"
 QDRANT_STORAGE="${DATA_DIR}/qdrant-storage"
 QDRANT_LABEL="com.mem0brady.qdrant"
 SERVER_LABEL="com.mem0brady.server"
-QDRANT_URL="${MEM0_BRADY_QDRANT_URL:-http://127.0.0.1:6433}"
-MCP_URL="${MEM0_BRADY_MCP_URL:-http://127.0.0.1:8788/mcp}"
 GUI="gui/$(id -u)"
+
+# Read a KEY out of the config without sourcing it (the file holds the OpenAI
+# key; sourcing would export it into this shell and every child process).
+env_get() {
+  local key="$1"
+  [ -f "$ENV_FILE" ] || return 0
+  grep -E "^${key}=" "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true
+}
+
+# Precedence: explicit env var > config > default. Defaults only apply to a
+# machine with no config yet, which the Config section reports as a failure
+# anyway.
+STACK="${MEM0_BRADY_STACK:-$(env_get MEM0_BRADY_STACK)}"; STACK="${STACK:-managed}"
+QDRANT_URL="${MEM0_BRADY_QDRANT_URL:-$(env_get MEM0_QDRANT_URL)}"
+QDRANT_URL="${QDRANT_URL:-http://127.0.0.1:6433}"
+MCP_URL="${MEM0_BRADY_MCP_URL:-$(env_get MEM0_BRADY_MCP_URL)}"
+MCP_URL="${MCP_URL:-http://127.0.0.1:8788/mcp}"
+COLLECTION="$(env_get MEM0_COLLECTION)"; COLLECTION="${COLLECTION:-mem0_brady}"
+USER_ID="$(env_get MEM0_USER_ID)"; USER_ID="${USER_ID:-shared-bch}"
 
 print_header() { printf "\n${BOLD}%s${NC}\n" "$1"; printf '%s\n' "------------------------------------------------------------"; }
 pass() { printf "  ${GREEN}OK${NC}      %s\n" "$1"; }
@@ -59,11 +85,22 @@ if command -v uv >/dev/null 2>&1; then pass "uv found at $(command -v uv)"; else
 for bin in mem0-mcp-selfhosted mem0-hook-context mem0-hook-stop; do
   if command -v "$bin" >/dev/null 2>&1; then pass "$bin on PATH"; else fail_required "$bin not on PATH" "Run /mem0-brady:setup."; fi
 done
-if [ -x "$QDRANT_BIN" ]; then
-  pass "qdrant binary present ($("$QDRANT_BIN" --version 2>/dev/null | head -1))"
+if [ "$STACK" = "managed" ]; then
+  if [ -x "$QDRANT_BIN" ]; then
+    pass "qdrant binary present ($("$QDRANT_BIN" --version 2>/dev/null | head -1))"
+  else
+    fail_required "qdrant binary missing at ${QDRANT_BIN}" "Run /mem0-brady:setup."
+  fi
 else
-  fail_required "qdrant binary missing at ${QDRANT_BIN}" "Run /mem0-brady:setup."
+  pass "qdrant binary not needed (external stack)"
 fi
+
+# --- Stack + identity --------------------------------------------------------
+print_header "Stack + store identity"
+pass "stack: ${STACK}"
+pass "collection: ${COLLECTION}   user_id: ${USER_ID}"
+pass "qdrant: ${QDRANT_URL}"
+pass "mcp:    ${MCP_URL}"
 
 # --- Config ------------------------------------------------------------------
 print_header "Config (required)"
@@ -79,16 +116,48 @@ fi
 
 # --- launchd agents ----------------------------------------------------------
 print_header "launchd agents (required)"
-agent_loaded "$QDRANT_LABEL" && pass "${QDRANT_LABEL} is loaded" || fail_required "${QDRANT_LABEL} not loaded" "Run /mem0-brady:setup."
-agent_loaded "$SERVER_LABEL" && pass "${SERVER_LABEL} is loaded" || fail_required "${SERVER_LABEL} not loaded" "Run /mem0-brady:setup."
+if [ "$STACK" = "managed" ]; then
+  agent_loaded "$QDRANT_LABEL" && pass "${QDRANT_LABEL} is loaded" || fail_required "${QDRANT_LABEL} not loaded" "Run /mem0-brady:setup."
+  agent_loaded "$SERVER_LABEL" && pass "${SERVER_LABEL} is loaded" || fail_required "${SERVER_LABEL} not loaded" "Run /mem0-brady:setup."
+else
+  pass "no launchd agents (external stack — you run Qdrant + the MCP server)"
+  # A leftover managed agent still bound to its port is invisible here but will
+  # quietly serve a DIFFERENT store than the one this config points at.
+  for lbl in "$QDRANT_LABEL" "$SERVER_LABEL"; do
+    agent_loaded "$lbl" && fail_optional "${lbl} is still loaded from a previous managed install" \
+      "It serves a different store than this config. Remove it: launchctl bootout ${GUI}/${lbl}"
+  done
+fi
 
 # --- Qdrant server -----------------------------------------------------------
 print_header "Qdrant server (required)"
 CODE="$(http_code "${QDRANT_URL}/readyz")"
 if [ "$CODE" != "000" ]; then
   pass "Qdrant reachable at ${QDRANT_URL} (HTTP ${CODE})"
+  # The recall/capture hooks instantiate mem0 directly against this URL, so a
+  # collection whose vector size disagrees with MEM0_EMBED_DIMS fails at runtime
+  # deep inside mem0. Surface it here instead.
+  COLL_JSON="$(curl -s --max-time 5 "${QDRANT_URL}/collections/${COLLECTION}" 2>/dev/null || true)"
+  if printf '%s' "$COLL_JSON" | jq -e '.result' >/dev/null 2>&1; then
+    HAVE_DIMS="$(printf '%s' "$COLL_JSON" | jq -r '.result.config.params.vectors.size // empty')"
+    POINTS="$(printf '%s' "$COLL_JSON" | jq -r '.result.points_count // 0')"
+    WANT_DIMS="$(env_get MEM0_EMBED_DIMS)"
+    if [ -n "$HAVE_DIMS" ] && [ -n "$WANT_DIMS" ] && [ "$HAVE_DIMS" != "$WANT_DIMS" ]; then
+      fail_required "collection '${COLLECTION}' has ${HAVE_DIMS}-dim vectors but MEM0_EMBED_DIMS=${WANT_DIMS}" \
+        "Point MEM0_COLLECTION at a matching collection, or migrate the data."
+    else
+      pass "collection '${COLLECTION}': ${POINTS} memories, ${HAVE_DIMS:-?} dims"
+    fi
+  else
+    fail_optional "collection '${COLLECTION}' does not exist yet" "Normal on a fresh store — it is created on the first write."
+  fi
 else
-  fail_required "Qdrant not reachable at ${QDRANT_URL}" "Check ${DATA_DIR}/qdrant.log; re-run /mem0-brady:setup."
+  if [ "$STACK" = "managed" ]; then
+    fail_required "Qdrant not reachable at ${QDRANT_URL}" "Check ${DATA_DIR}/qdrant.log; re-run /mem0-brady:setup."
+  else
+    fail_required "Qdrant not reachable at ${QDRANT_URL}" \
+      "Start your external stack. The hooks talk to Qdrant DIRECTLY, so it must be published on the host — a container-network-only port is invisible to them (docker-compose: ports: [\"127.0.0.1:6333:6333\"])."
+  fi
 fi
 
 # --- MCP server --------------------------------------------------------------
@@ -100,12 +169,18 @@ CODE="$(http_code "$MCP_URL")"
 if [ "$CODE" != "000" ]; then
   pass "MCP server reachable at ${MCP_URL} (HTTP ${CODE})"
 else
-  fail_required "MCP server not reachable at ${MCP_URL}" "Check ${DATA_DIR}/server.log; re-run /mem0-brady:setup."
+  if [ "$STACK" = "managed" ]; then
+    fail_required "MCP server not reachable at ${MCP_URL}" "Check ${DATA_DIR}/server.log; re-run /mem0-brady:setup."
+  else
+    fail_required "MCP server not reachable at ${MCP_URL}" "Start your external stack (the plugin does not run it)."
+  fi
 fi
 
 # --- Qdrant storage ----------------------------------------------------------
 print_header "Qdrant storage (required)"
-if [ -d "$QDRANT_STORAGE" ]; then
+if [ "$STACK" != "managed" ]; then
+  pass "storage is owned by your external stack, not the plugin"
+elif [ -d "$QDRANT_STORAGE" ]; then
   if [ -w "$QDRANT_STORAGE" ]; then pass "storage dir present + writable: ${QDRANT_STORAGE}"; else fail_required "storage dir not writable: ${QDRANT_STORAGE}" "chmod u+w ${QDRANT_STORAGE}"; fi
 else
   fail_required "storage dir missing: ${QDRANT_STORAGE}" "Run /mem0-brady:setup."
