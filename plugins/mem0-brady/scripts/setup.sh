@@ -70,6 +70,12 @@ warn() { printf "  ${YELLOW}WARN${NC} %s\n" "$1"; }
 die()  { printf "  ${RED}FAIL${NC} %s\n" "$1" >&2; exit 1; }
 step() { printf "\n${BOLD}%s${NC}\n" "$1"; }
 
+# BSD mktemp with no template ignores TMPDIR and always lands in the Darwin
+# per-user temp dir, which some sandboxes deny. Always pass a template.
+TMPROOT="${TMPDIR:-/tmp}"; TMPROOT="${TMPROOT%/}"
+mktmp()  { mktemp "${TMPROOT}/mem0-brady-setup.XXXXXX"; }
+mktmpd() { mktemp -d "${TMPROOT}/mem0-brady-setup.XXXXXX"; }
+
 # Return the HTTP status code for a URL, or 000 on connection failure.
 # curl prints "%{http_code}" (000 on failure) AND exits non-zero, so no
 # `|| echo 000` fallback — that would concatenate a second 000.
@@ -289,7 +295,7 @@ if [ "$STACK" = "managed" ]; then
   else
     QURL="https://github.com/qdrant/qdrant/releases/download/${QDRANT_VERSION}/${QASSET}"
     printf "  downloading %s ...\n" "$QURL"
-    TMP="$(mktemp -d)"
+    TMP="$(mktmpd)"
     curl -LsSf "$QURL" -o "${TMP}/qdrant.tar.gz" || die "qdrant download failed: ${QURL}"
     tar -xzf "${TMP}/qdrant.tar.gz" -C "$TMP" || die "qdrant extract failed"
     # The tarball contains a single `qdrant` binary at its root.
@@ -327,7 +333,7 @@ step "Config + data dirs"
 mkdir -p "$CONFIG_DIR" "$LA_DIR"
 [ "$STACK" = "managed" ] && mkdir -p "$QDRANT_STORAGE"
 
-RENDERED="$(mktemp)"
+RENDERED="$(mktmp)"
 trap 'rm -f "$RENDERED"' EXIT
 KEY="$OPENAI_KEY" STACK_V="$STACK" COLLECTION_V="$COLLECTION" USER_ID_V="$USER_ID" \
 QDRANT_URL_V="$QDRANT_URL" MCP_URL_V="$MCP_URL" MCP_PORT_V="$MCP_PORT" \
@@ -352,7 +358,7 @@ if [ -f "$ENV_FILE" ]; then
   # template doesn't know about — untouched, and append keys that are new in
   # this plugin version. Losing a hand-tuned config to an upgrade is the whole
   # bug this replaces.
-  MERGED="$(mktemp)"
+  MERGED="$(mktmp)"
   cp "$ENV_FILE" "$MERGED"
   for k in MEM0_BRADY_STACK MEM0_COLLECTION MEM0_USER_ID MEM0_QDRANT_URL \
            MEM0_BRADY_MCP_URL MEM0_PORT MEM0_BRADY_QDRANT_HTTP_PORT \
@@ -361,7 +367,7 @@ if [ -f "$ENV_FILE" ]; then
     [ -n "$newline" ] || continue
     if grep -qE "^${k}=" "$MERGED"; then
       # Rewrite in place via awk (sed would mangle URLs and base64-ish keys).
-      TMP2="$(mktemp)"
+      TMP2="$(mktmp)"
       K="$k" LINE="$newline" awk '
         $0 ~ "^" ENVIRON["K"] "=" && !done { print ENVIRON["LINE"]; done=1; next }
         { print }
