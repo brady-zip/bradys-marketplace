@@ -1,0 +1,11 @@
+# The stack's build context is this plugin root (so the Dockerfile can COPY the
+# vendored server/). Everything the image doesn't need is excluded — without
+# this, every hook, skill and doc would be shipped into the build daemon.
+*
+!server/
+server/tests/
+server/benchmarks/
+server/.git/
+server/uv.lock
+**/__pycache__/
+**/*.pyc
