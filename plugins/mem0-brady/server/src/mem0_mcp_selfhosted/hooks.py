@@ -121,6 +121,28 @@ def _get_memory():
     return _memory
 
 
+def _get_search_memory():
+    """Return the client to use for RECALL-only paths.
+
+    Prefers the MCP server when MEM0_MCP_URL is set. The server already holds
+    the Qdrant URL, collection, user_id and API key, and it is long-lived, so
+    recall neither duplicates that configuration on the host nor pays a cold
+    ``Memory.from_config()`` (spaCy + fastembed model load) in every one of
+    these short-lived hook processes.
+
+    Falls back to the in-process client when unset, so nothing changes for a
+    managed/local stack.
+
+    NOT for capture: Stop/PreCompact need ``.add`` and the raw ``.llm`` for
+    handoff synthesis, and no MCP tool exposes an LLM completion yet. Those
+    keep calling _get_memory().
+    """
+    from mem0_mcp_selfhosted.mcp_client import get_search_client
+
+    client = get_search_client()
+    return client if client is not None else _get_memory()
+
+
 def _output(data: dict) -> None:
     """Print JSON to stdout (the hook response channel)."""
     print(json.dumps(data))
@@ -211,7 +233,7 @@ def context_main() -> None:
         user_id = _get_user_id()
         recall_app_ids = _get_recall_app_ids()
 
-        mem = _get_memory()
+        mem = _get_search_memory()
 
         # Multi-query, multi-app_id search merged/deduped by id. NOTE(fork):
         # mem0ai 2.x search(query, *, top_k, filters, ...) takes entity scopes
@@ -803,7 +825,7 @@ def prompt_main() -> None:
 
         # Resume-intent → actually pre-search mem0 and inject.
         if _RESUME_RE.search(prompt):
-            mem = _get_memory()
+            mem = _get_search_memory()
             mems = _search_scoped(
                 mem,
                 queries=[
@@ -887,7 +909,7 @@ def file_context_main() -> None:
         basename = p.name
         query = f"{rel} {basename}" if rel != basename else rel
 
-        mem = _get_memory()
+        mem = _get_search_memory()
         mems = _search_scoped(
             mem,
             queries=[query],

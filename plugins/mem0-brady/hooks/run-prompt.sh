@@ -17,6 +17,17 @@ if [ -f "$ENV_FILE" ]; then
   set +a
 fi
 
+# Recall via the MCP server instead of an in-process mem0 client, when this
+# install points at an external stack. The server already holds the Qdrant URL,
+# collection, user_id and API key, and is long-lived, so recall neither
+# duplicates that config on the host nor pays a cold Memory init per hook
+# process. The fork reads MEM0_MCP_URL; the plugin stores it under its own
+# namespaced key, so bridge the two here.
+# Managed stacks stay on the direct client — unchanged behaviour.
+if [ "${MEM0_BRADY_STACK:-managed}" = "external" ] && [ -n "${MEM0_BRADY_MCP_URL:-}" ]; then
+  export MEM0_MCP_URL="$MEM0_BRADY_MCP_URL"
+fi
+
 export PATH="$HOME/.local/bin:$PATH"
 
 # Domain partition (app_id) for this session — see run-context.sh.
