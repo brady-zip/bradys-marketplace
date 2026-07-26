@@ -189,6 +189,15 @@ def build_config() -> tuple[dict[str, Any], list[ProviderInfo], dict[str, Any] |
     if history_db_path:
         config_dict["history_db_path"] = history_db_path
 
+    # Steer WHAT the extractor considers a fact. This is the only mechanism that
+    # actually works: mem0 folds custom_instructions into the fact-extraction
+    # system prompt, whereas appending directions to the message text just gives
+    # the extractor more content to extract — it will happily store "the user was
+    # advised to extract only durable facts" as a memory.
+    custom_instructions = opt_env("MEM0_CUSTOM_INSTRUCTIONS")
+    if custom_instructions:
+        config_dict["custom_instructions"] = custom_instructions
+
     # --- Reranker (optional) ---
     # Provider-agnostic: any reranker pre-registered in mem0ai's RerankerFactory
     # works — no custom module or registration needed. Two families:
