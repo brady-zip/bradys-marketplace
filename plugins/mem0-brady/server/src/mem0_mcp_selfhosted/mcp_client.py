@@ -178,14 +178,22 @@ class McpMemory:
         user_id: str | None = None,
         infer: bool | None = None,
         metadata: dict | None = None,
+        agent_id: str | None = None,
+        run_id: str | None = None,
         **_ignored: Any,
     ) -> Any:
         """Mirror ``Memory.add``, mapping its arguments onto add_memory.
 
         The hooks always pass a single user-role message, so it is flattened to
-        the tool's ``text`` field. ``app_id`` is carried inside ``metadata`` by
-        the callers, and the tool takes it as a named parameter, so it is lifted
-        out — leaving the rest of the metadata to travel as-is.
+        the tool's ``text`` field.
+
+        The entity scopes travel inside ``metadata`` (how the hooks pass them)
+        or as named arguments (how ``Memory.add`` takes them), and the tool
+        takes each as a named parameter, so all three are lifted out — leaving
+        the rest of the metadata to travel as-is. ``search`` below has always
+        lifted all three; ``add`` lifted only ``app_id``, which meant agent_id
+        and run_id could be *filtered* on but never *written*, so under an
+        external stack they silently vanished into ``**_ignored``.
         """
         text = ""
         for message in messages or []:
@@ -198,9 +206,14 @@ class McpMemory:
 
         metadata = dict(metadata or {})
         args: dict[str, Any] = {"text": text}
-        app_id = metadata.pop("app_id", None)
-        if app_id:
-            args["app_id"] = app_id
+        # An explicit keyword wins over the same key in metadata: it is the more
+        # specific way to say it, and mirrors Memory.add's own signature.
+        explicit = {"agent_id": agent_id, "run_id": run_id}
+        for key in ("app_id", "agent_id", "run_id"):
+            value = explicit.get(key) or metadata.pop(key, None)
+            metadata.pop(key, None)
+            if value:
+                args[key] = value
         if metadata:
             args["metadata"] = metadata
         uid = explicit_user_id()

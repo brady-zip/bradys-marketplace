@@ -101,6 +101,19 @@ def _get_app_id() -> str | None:
     return val or None
 
 
+def _get_agent_id() -> str | None:
+    """Resolve the writing agent from MEM0_AGENT_ID.
+
+    Optional and backward-compatible, exactly like ``_get_app_id``: unset means
+    capture writes no agent_id and behaves as before. Set (the hook wrapper
+    exports whatever lib-scope.sh resolved) means the capture records WHICH
+    agent produced it, so several agents can work one project without
+    cross-pollinating what each has learned.
+    """
+    val = os.environ.get("MEM0_AGENT_ID", "").strip()
+    return val or None
+
+
 def _get_recall_app_ids() -> list[str]:
     """Resolve the recall app_id filter list from MEM0_RECALL_APP_IDS.
 
@@ -753,20 +766,38 @@ def _capture_summary(
     )
 
     metadata: dict = {"source": source, "session_id": session_id}
-    # When MEM0_APP_ID is set, tag with the domain partition so the memory
-    # lands in the right bucket and is filterable on recall. When unset, no
-    # app_id is written (backward-compatible generic case).
+    # Each scope below is optional and independently backward-compatible: unset
+    # means that scope is simply not written.
+    #
+    # app_id — WHAT this session was about. It rides in metadata because mem0's
+    # Memory.add has no app_id parameter; the MCP client lifts it back out into
+    # a real scope argument on the way to the tool.
     app_id = _get_app_id()
     if app_id:
         metadata["app_id"] = app_id
 
-    # When the session is tagged with a workstream (active pointer keyed on
-    # session_id), tag the captured memory with workstream_id so passive recall
-    # and /digest can filter by workstream, and pass it into the handoff so the
-    # recap is workstream-aware and carries the re-activation call.
+    # agent_id — WHICH agent produced this.
+    # run_id — the workstream thread it belongs to, when the session is tagged
+    # (active pointer keyed on session_id).
+    #
+    # These two are passed as KEYWORDS, not metadata, because both clients
+    # understand them there and only one understands them in metadata: mem0's
+    # own Memory.add takes them as named scope arguments and would otherwise
+    # store them as inert payload. run_id being a real scope is the point —
+    # search/get/delete filter on it server-side, so a workstream's accumulated
+    # narrative comes back ranked by relevance and retires in one call when the
+    # thread ends. It was previously written as metadata["workstream_id"], which
+    # nothing could filter on; the documented claim that recall and /digest used
+    # it was never true of an opaque payload field.
+    agent_id = _get_agent_id()
     workstream = _active_workstream(session_id)
-    if workstream:
-        metadata["workstream_id"] = workstream["slug"]
+    run_id = workstream["slug"] if workstream else None
+
+    scopes: dict = {}
+    if agent_id:
+        scopes["agent_id"] = agent_id
+    if run_id:
+        scopes["run_id"] = run_id
 
     mem = _get_client()
 
@@ -783,6 +814,7 @@ def _capture_summary(
             user_id=_get_user_id(),
             infer=True,
             metadata=metadata,
+            **scopes,
         )
         _mark_captured(cwd, project_name)
 
