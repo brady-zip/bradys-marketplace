@@ -22,6 +22,9 @@ Mem0 does **both** kinds of memory here:
   and, critically, **which recall-hook injections actually shaped the work**. Scopes to the
   current session when run mid-session, or the whole day when run in a fresh one. See
   [Digest](#digest-is-the-memory-layer-useful).
+- **`/mem0-brady:scopes`** — show which scopes a directory resolves to and **which config layer
+  decided each**, plus which partitions already hold memories. See
+  [Memory model](#memory-model-one-store-four-scopes).
 - **`/mem0-brady:migrate`** — move a store between stacks, or merge a second machine's
   memories into a shared one. Vectors are copied **verbatim** (no re-embedding, so no OpenAI
   spend and no chance of the fact-extractor rewording a memory in transit), point ids are
@@ -70,23 +73,48 @@ Moving between stacks — or merging a second machine's memories into one shared
 `/mem0-brady:migrate`. Setup refuses to switch an install to `external` while managed-stack
 data is still sitting there unmigrated.
 
-## Memory model: one store, partitioned by `app_id`
+## Memory model: one store, four scopes
 
-There is **one** `user_id` (`MEM0_USER_ID`, whatever this install set it to) that every actor
-reads and writes. Memory is partitioned into domains by an `app_id` tag, kept in the Qdrant
-payload:
+There is **one** store. Everything else is a slice of it:
 
-| Actor | Capture (write) | Recall (read filter) |
-|-------|-----------------|----------------------|
-| Claude Code in the evergreen repo | `evergreen` | `evergreen` |
-| Claude Code elsewhere | `general` | `general` |
-| Hal | `hal-ops` | `hal-ops` + `evergreen` |
+| Scope | Answers | Set by |
+|-------|---------|--------|
+| `user_id` | whose store | the install (`MEM0_USER_ID`); under an external stack the **server** owns it and the host must not duplicate it |
+| `app_id` | *what* the work is about | resolved per session from the cwd |
+| `agent_id` | *which* agent wrote it | resolved per session; defaults to `claude` |
+| `run_id` | *which* long-running thread | the active workstream (`/mem0-brady:workstream`) |
 
-`run_id` stays available, orthogonally, for scratch / working memory scoped to a task.
+`app_id` and `agent_id` are orthogonal, which is the point: one project can host a coding agent
+on `app_id=<project>` and an ops agent on `app_id=<project>-ops` with `agent_id` distinguishing
+them, so neither inherits the other's task-learned behaviour.
 
-The hook wrappers derive the domain from the session's cwd (`*evergreen* → evergreen`, else
-`general`) and export `MEM0_APP_ID` (capture) + `MEM0_RECALL_APP_IDS` (recall) before invoking
-the fork hooks. Active `mcp__mem0__*` writes pass `app_id` per call (a PreToolUse guard enforces it).
+### How a session resolves its scopes
+
+Nothing about the layout is baked into the plugin — repo names are per-machine data. Resolution
+runs through four layers, highest first (`hooks/lib-scope.sh` is the single implementation; all
+seven hooks source it):
+
+1. **environment** — `MEM0_SCOPE_APP_ID` / `MEM0_SCOPE_AGENT_ID`, how an agent pins its own
+   identity at launch
+2. **repo** — `.mem0-brady.json` at or above the session cwd:
+   ```json
+   { "app_id": "storykeeper", "recall_app_ids": ["storykeeper", "general"] }
+   ```
+   `recall_app_ids` is usually the one worth setting: it widens what a repo *reads* without
+   widening what it *writes*.
+3. **machine** — `MEM0_SCOPE_RULES='<app_id>:<glob>;…'` (first match wins) and
+   `MEM0_SCOPE_DEFAULT_APP`, in `~/.config/mem0-brady/.env`. **Quote the value** — the file is
+   `source`d, so an unquoted `;` ends the assignment and an unquoted `*` globs.
+4. **plugin default** — `general`
+
+Run **`/mem0-brady:scopes [path]`** to see what a directory resolves to and *which layer
+decided it*, alongside which partitions already hold memories — the expensive mistake is a name
+one character off an existing one, which starts a new partition in silence.
+
+The wrappers export `MEM0_APP_ID` / `MEM0_AGENT_ID` (capture) and `MEM0_RECALL_APP_IDS`
+(recall) before invoking the fork hooks. Explicit `mcp__mem0__*` writes get `app_id` and
+`agent_id` injected by a PreToolUse guard, so tool calls and passive captures from one session
+land in the same partition.
 
 ## How it works
 
@@ -147,18 +175,26 @@ This is powered by two append-only logs under `~/.local/share/mem0-brady/logs/`:
 |-----|-----------|-------|
 | `mem0_ops.log` | `PostToolUse(mcp__mem0__*)` hook | every explicit `add_memory` / `search_memories` call (TSV: ts + `{tool,session_id,input}`) |
 | `mem0_recall.log` | the recall hooks (capture-tee-replay) | every hook injection (JSONL: `{ts,hook,session_id,app_id,chars,content}`) |
-| `mem0_denials.log` | `PreToolUse(mcp__mem0__*)` guard (`enforce-metadata.sh`) | every guard action (TSV: ts + `{tool,session_id,outcome,detail,input_keys}`) — an auto-injected `app_id` or a denied non-shared `user_id`. These never reach `mem0_ops.log`, because a PreToolUse deny/inject never triggers PostToolUse |
+| `mem0_denials.log` | `PreToolUse(mcp__mem0__*)` guard (`enforce-metadata.sh`) | every guard action (TSV: ts + `{tool,session_id,outcome,detail,input_keys}`) — an auto-injected `app_id`/`agent_id`, or a `user_id` denied for disagreeing with the store. These never reach `mem0_ops.log`, because a PreToolUse deny/inject never triggers PostToolUse |
 | `current_session.json` | `SessionStart` steer hook | marker for the most-recently-started session, so the digest can scope to it |
 
 The recall hooks run the fork console script, **log what it injected, then replay its
 exact output** — recall behaviour is unchanged, the logging is a fail-open side effect.
 `mem0_recall.log` only starts filling on sessions that begin *after* this is installed.
 
-The `enforce-metadata.sh` write guard keeps every `add_memory` in the right partition. A
-missing `app_id` is **auto-injected** from the session cwd's domain (via PreToolUse
-`updatedInput`) rather than bounced back to the model — so a write can't silently misfile into
-`general` when the session is in another domain. A pinned non-shared `user_id` is still denied
-(it would fragment the shared store). Both actions are audited to `mem0_denials.log`.
+The `enforce-metadata.sh` write guard keeps every `add_memory` in the same scopes the passive
+capture path uses. A missing `app_id` or `agent_id` is **auto-injected** from the session's
+resolved scopes (via PreToolUse `updatedInput`) rather than bounced back to the model — so a
+tool write can't silently misfile into `general` while the session's captures go elsewhere. An
+explicitly-passed value is never overwritten, so a deliberate cross-domain write still works.
+
+A `user_id` that disagrees with the store is denied — but **only when this host knows what the
+store's `user_id` is**. Under an external stack the server owns the namespace and the host
+legitimately doesn't have it; there, the guard stands down rather than guessing. That asymmetry
+is deliberate: the deny message *names a replacement namespace*, so a wrong guess doesn't just
+fail to protect, it actively steers the retry at a namespace nothing reads.
+
+All guard actions are audited to `mem0_denials.log`.
 
 ## Workstreams
 
@@ -186,8 +222,16 @@ While a session is tagged, the fork's Stop / PreCompact hooks:
 2. **bake a `/mem0-brady:workstream <slug>` call into the handoff**, so a session that resumes
    from it re-tags itself and pulls the workstream forward — the workstream rides the handoff
    chain across sessions and worktrees; and
-3. tag the auto-captured session summary with `workstream_id`, so `/mem0-brady:digest` and
-   passive recall can filter by workstream (the file doc stays the source of truth).
+3. write the auto-captured session summary under **`run_id=<slug>`** — a real mem0 scope, so
+   `search_memories` / `get_memories` / `delete_entities` filter on it server-side.
+
+That last one splits the workstream in two on purpose. The **doc** keeps what must be
+enumerated exactly (goal, config, artifact pointers, the Pieces index); the **run scope** keeps
+the cross-session narrative — what was tried, decided, broke — which you want ranked by
+relevance rather than read top to bottom. Without the split, a long-lived workstream's doc grows
+past the point anyone rereads it, because every session appends and none prune. Catching up is
+`search_memories(query=…, run_id=<slug>)`; retiring a finished thread is one
+`delete_entities(run_id=<slug>)`.
 
 Beyond activation, ask "what workstream am I on" (show), or list / deactivate. The helper
 (`scripts/workstream.py`, stdlib-only) does all file I/O deterministically.
