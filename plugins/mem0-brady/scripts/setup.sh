@@ -273,10 +273,16 @@ if [ "$MCP_MODE" = "1" ]; then
   # MCP mode drives mem0 through the server, so the hooks never import mem0 —
   # skip the `direct` extra and every model dependency behind it. This is the
   # difference between a ~70MB install and a multi-GB one.
-  uv tool install --force "${SERVER_DIR}" >/dev/null 2>&1 \
+# --reinstall (implies --refresh) is load-bearing, not belt-and-braces: the
+# vendored source is a PATH dependency whose version rarely changes while its
+# contents change constantly. Plain --force replaces the tool but reuses uv's
+# cached build for the same path+version, so editing the fork and re-running
+# setup silently reinstalls the OLD code — observed shipping a stale
+# mcp_client.py that wrote memories to the wrong namespace.
+  uv tool install --force --reinstall "${SERVER_DIR}" >/dev/null 2>&1 \
     || die "uv tool install failed for ${SERVER_DIR}"
 else
-  uv tool install --force \
+  uv tool install --force --reinstall \
     --with "mem0ai[extras,nlp]" \
     --with "sentence-transformers>=5" \
     --with "${SPACY_MODEL_URL}" \
