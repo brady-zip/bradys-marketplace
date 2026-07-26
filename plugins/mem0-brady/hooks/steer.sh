@@ -40,12 +40,16 @@ session_id="$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)"
 mem0_write_session_marker "$session_id" "$cwd" "$domain"
 mem0_write_cwd_session_marker "$session_id" "$cwd"
 
-# Recall breadth is usually just the write partition; say so plainly when it is,
-# and spell out the list only when a repo has deliberately widened it.
+# Recall breadth is usually just the write partition; say so plainly when it is.
+# When a repo has widened it, the instruction has to be executable: PASSIVE
+# recall runs one filtered search per app_id and merges (hooks.py builds a
+# filter per id), but the search_memories TOOL takes a single app_id string.
+# Telling the model to "filter to [a,b]" would be asking for a call it cannot
+# make, so spell out the two ways it actually can.
 if [ "$recall" = "$domain" ]; then
   recall_clause="app_id='${domain}'"
 else
-  recall_clause="app_id in [${recall}] (this checkout widened recall beyond its write partition)"
+  recall_clause="app_id='${domain}' — and this checkout also recalls from [${recall}], so when the answer may live in a sibling partition, either run one search per app_id or omit app_id to search the whole store"
 fi
 
 steer="Memory is active (Mem0, self-hosted). This session's Mem0 SCOPES: app_id='${domain}', agent_id='${agent}' (cwd=${cwd}).
