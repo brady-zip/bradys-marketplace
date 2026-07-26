@@ -85,31 +85,11 @@ if [ -z "$MCP_URL" ] && [ -f "$ENV_FILE" ]; then
   MCP_URL="$(grep -E '^MEM0_BRADY_MCP_URL=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)"
 fi
 
-mcp_session=""
-mcp_init() {
-  [ -n "$MCP_URL" ] || return 1
-  command -v curl >/dev/null 2>&1 && command -v jq >/dev/null 2>&1 || return 1
-  mcp_session="$(curl -s -D- -o /dev/null --max-time 5 -X POST "$MCP_URL" \
-    -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
-    -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"mem0-brady-scopes","version":"1"}}}' \
-    2>/dev/null | tr -d '\r' | awk -F': ' 'tolower($1)=="mcp-session-id"{print $2}')"
-  [ -n "$mcp_session" ] || return 1
-  curl -s --max-time 5 -X POST "$MCP_URL" -H 'Content-Type: application/json' \
-    -H 'Accept: application/json, text/event-stream' -H "mcp-session-id: $mcp_session" \
-    -d '{"jsonrpc":"2.0","method":"notifications/initialized"}' >/dev/null 2>&1
-  return 0
-}
-
-# mcp_call <tool> <json-args> -> the tool's text payload on stdout
-mcp_call() {
-  curl -s --max-time 10 -X POST "$MCP_URL" -H 'Content-Type: application/json' \
-    -H 'Accept: application/json, text/event-stream' -H "mcp-session-id: $mcp_session" \
-    -d "$(jq -nc --arg n "$1" --argjson a "$2" '{jsonrpc:"2.0",id:2,method:"tools/call",params:{name:$n,arguments:$a}}')" \
-    2>/dev/null | sed -n 's/^data: //p' | jq -r '.result.content[0].text // empty' 2>/dev/null
-}
+# shellcheck source=lib-mcp.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib-mcp.sh"
 
 header "In the store"
-if ! mcp_init; then
+if ! mcp_init "$MCP_URL"; then
   printf "  ${YELLOW}skipped${NC} — MCP server not reachable at %s\n" "${MCP_URL:-<unset>}"
   printf "  ${DIM}Resolution above is unaffected; only the inventory needs the server.${NC}\n"
   exit 0
@@ -125,34 +105,43 @@ if [ -n "$ENTITIES" ]; then
     "  runs     " + fmt(.runs)' 2>/dev/null
 fi
 
-# Every app_id this machine can currently resolve to: the rules, the default,
-# whatever the repo file asks for, and what this directory actually resolved to.
+# Two lists that must be compared, not just displayed: the partitions that
+# actually hold memories, and the ones this machine's config can produce. A name
+# in the second but not the first is either a deliberate new partition or a typo,
+# and they are indistinguishable from here — which is exactly why it is worth
+# printing rather than assuming.
+COUNTS="$(mcp_app_id_counts)"
 RULES=""
 [ -f "$ENV_FILE" ] && RULES="$(grep -E '^MEM0_SCOPE_RULES=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- | tr -d "\"'" || true)"
 DEFAULT_APP=""
 [ -f "$ENV_FILE" ] && DEFAULT_APP="$(grep -E '^MEM0_SCOPE_DEFAULT_APP=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)"
 
-CANDIDATES="$MEM0_APP_ID
-$(printf '%s' "$MEM0_RECALL_APP_IDS" | tr ',' '\n')
-${DEFAULT_APP}
-$(printf '%s' "$RULES" | tr ';' '\n' | cut -d: -f1)"
-CANDIDATES="$(printf '%s\n' "$CANDIDATES" | sed '/^[[:space:]]*$/d' | sort -u)"
+RESOLVABLE="$(printf '%s\n%s\n%s\n%s\n' \
+  "$MEM0_APP_ID" \
+  "$(printf '%s' "$MEM0_RECALL_APP_IDS" | tr ',' '\n')" \
+  "$DEFAULT_APP" \
+  "$(printf '%s' "$RULES" | tr ';' '\n' | cut -d: -f1)" \
+  | sed '/^[[:space:]]*$/d' | sort -u)"
 
-printf "\n  ${DIM}app_id partitions this machine can resolve to:${NC}\n"
+printf "\n  ${DIM}app_id partitions (● holds memories · ○ empty):${NC}\n"
+ALL="$(printf '%s\n%s\n' "$RESOLVABLE" "$(printf '%s' "$COUNTS" | awk '{print $2}')" \
+       | sed '/^[[:space:]]*$/d' | sort -u)"
 while IFS= read -r app; do
   [ -n "$app" ] || continue
-  n="$(mcp_call get_memories "$(jq -nc --arg a "$app" '{app_id:$a,limit:1000}')" \
-       | jq -r 'if type=="object" then (.results // .memories // []) else . end | length' 2>/dev/null)"
+  n="$(printf '%s\n' "$COUNTS" | awk -v a="$app" '$2==a {print $1; exit}')"
   n="${n:-0}"
-  marker=""
-  [ "$app" = "$MEM0_APP_ID" ] && marker=" ${BOLD}← writes go here${NC}"
+  note=""
+  [ "$app" = "$MEM0_APP_ID" ] && note=" ${BOLD}← writes go here${NC}"
+  if printf '%s\n' "$RESOLVABLE" | grep -qxF "$app"; then :; else
+    note="${note} ${DIM}(in the store, but no config here routes to it)${NC}"
+  fi
   if [ "$n" = "0" ]; then
-    printf "    ${YELLOW}%-22s %s${NC}%b\n" "$app" "empty — a write starts a NEW partition" "$marker"
+    printf "    ${YELLOW}○ %-20s empty — a write starts a NEW partition${NC}%b\n" "$app" "$note"
   else
-    printf "    ${GREEN}%-22s${NC} %s memories%b\n" "$app" "$n" "$marker"
+    printf "    ${GREEN}● %-20s${NC} %s memories%b\n" "$app" "$n" "$note"
   fi
 done <<EOF
-$CANDIDATES
+$ALL
 EOF
 
 printf "\n  ${DIM}A partition one character off an existing one is silent: nothing errors,${NC}\n"
