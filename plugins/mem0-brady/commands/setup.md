@@ -1,5 +1,5 @@
 ---
-description: One-time setup for mem0-brady — installs the Mem0 fork, captures your OpenAI key, and starts the local MCP server
+description: One-time setup for mem0-brady — installs the Mem0 fork, writes the config, and stands up (or points at) the MCP server
 allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/setup.sh)
 ---
 
@@ -7,23 +7,23 @@ Run the mem0-brady installer. On a first run it asks which stack backs this inst
 what store it should point at; on every later run it reads those answers back out of
 `~/.config/mem0-brady/.env` and stays silent.
 
-Always: install `uv` if missing, `uv tool install` the patched self-hosted Mem0 fork,
-reuse (or prompt for) your OpenAI API key (used for both the LLM and embeddings), and
+Always: install `uv` if missing, `uv tool install` the patched self-hosted Mem0 fork, and
 **merge** `~/.config/mem0-brady/.env` — existing values, comments and unknown keys are
 preserved; only genuinely new keys are added. A hand-tuned config survives an upgrade.
 
-**`managed`** (default) additionally installs the native Qdrant server binary and loads
-two launchd agents — Qdrant and the MCP server — on ports from your config (default
-`6433`/`8788`). No Docker.
+**`managed`** (default) additionally installs mem0 and its models, the native Qdrant
+server binary, and two launchd agents — Qdrant and the MCP server — on ports from your
+config (default `6433`/`8788`). It reuses or prompts for your OpenAI API key. No Docker.
 
-**`external`** installs neither: you already run Qdrant and the MCP server yourself.
-Setup instead verifies Qdrant answers *from your shell*, because the recall/capture
-hooks talk to it directly rather than through the MCP server — a Qdrant published only
-to a container network is invisible to them. It also refuses to proceed if this machine
-still holds managed-stack data that would be stranded, pointing at `/mem0-brady:migrate`.
+**`external`** installs none of that, and no mem0 either: the hooks drive mem0 *through*
+your MCP server, so the host needs no Qdrant reachability, no API key and no store
+identity — the server owns all of it. The config comes out at two lines and the tool
+install at ~70MB rather than multiple GB. Setup verifies the MCP server answers, and
+refuses to proceed if this machine still holds managed-stack data that would be
+stranded, pointing at `/mem0-brady:migrate`.
 
-Store identity — collection, `user_id`, URLs — is per-install, never baked into the
-plugin. Two machines pointed at the same values share one memory.
+For a managed stack, store identity — collection, `user_id`, URLs — is per-install, never
+baked into the plugin. Two machines pointed at the same values share one memory.
 
 If no key is already present, the prompt reads from your terminal (hidden input), so a
 first-time run must be interactive. `MEM0_BRADY_NONINTERACTIVE=1` takes every default

@@ -29,7 +29,10 @@ COPY server/ /opt/mem0-mcp-selfhosted/
 #   --with fastembed    : Qdrant BM25 sparse vectors → hybrid (dense+keyword) search.
 #   --with "mem0ai[nlp]": spaCy lemmatizer feeding BM25 (plural/tense normalization).
 #   --with pip          : `spacy download` shells out to pip; the uv-tool venv needs it.
-RUN uv tool install "/opt/mem0-mcp-selfhosted" \
+# [direct] pulls mem0ai + its providers: the SERVER runs mem0 in-process, so it
+# needs them. Hosts that reach this server over MCP install the package without
+# that extra and stay small.
+RUN uv tool install "/opt/mem0-mcp-selfhosted[direct]" \
     --with fastembed \
     --with "mem0ai[nlp]" \
     --with pip

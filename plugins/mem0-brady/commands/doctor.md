@@ -13,9 +13,11 @@ vector size matches `MEM0_EMBED_DIMS`, that the MCP server answers, and (optiona
 workstream dirs + any active workstream tags.
 
 Under the **managed** stack it also checks the native Qdrant binary, both launchd agents
-(`com.mem0brady.qdrant`, `com.mem0brady.server`) and the storage dir. Under **external**
-those are skipped — you own them — and it instead warns if a leftover managed agent is
-still loaded, since that would quietly serve a different store than your config names.
+(`com.mem0brady.qdrant`, `com.mem0brady.server`), the storage dir, the API key, the
+collection's vector size and the reranker. Under **external** all of those are skipped —
+the server owns them and the host never contacts Qdrant — leaving the MCP server as the
+one thing that must answer. It still warns if a leftover managed agent is loaded, since
+that would quietly serve a different store than your config names.
 
 Execute:
 

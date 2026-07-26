@@ -30,24 +30,18 @@ Then point the plugin at it:
 MEM0_BRADY_STACK=external /mem0-brady:setup
 ```
 
-## Two vantage points on one Qdrant
+## Qdrant does not need publishing
 
-The single most confusing thing about this stack, and the one that bites:
+The plugin's hooks reach mem0 **through this server**, not around it, so the
+host never contacts Qdrant. `MEM0_BRADY_QDRANT_HOST_PORT` publishes it on
+loopback anyway because it is genuinely useful — `/mem0-brady:migrate` and any
+direct inspection (`curl .../collections`) use it — but nothing in normal
+operation depends on it. Drop the `ports:` entry from the `qdrant` service if
+you would rather it stayed sealed inside the compose network.
 
-| Client | Reaches Qdrant via | Needs |
-|---|---|---|
-| the MCP server (in the container) | `http://qdrant:6333`, the compose network | nothing published |
-| the plugin's recall/capture hooks (on the host) | `http://127.0.0.1:6333`, the published port | **the port published** |
-
-The hooks instantiate mem0 **directly** rather than calling the MCP server, so a
-Qdrant that is only `expose`d to the container network is invisible to them —
-recall silently returns nothing while `:8081` looks perfectly healthy. That is
-why `docker-compose.yml` publishes the port on loopback, and why
-`/mem0-brady:setup` hard-fails if it can't reach Qdrant from your shell.
-
-`MEM0_USER_ID` must also agree between `.env` here and
-`~/.config/mem0-brady/.env`, or the hooks and the MCP tools will write to two
-different namespaces inside the same collection.
+Store identity lives here and **only** here: an external plugin install holds no
+collection, no `user_id` and no API key, so there is no second copy to drift out
+of sync.
 
 ## Storage
 

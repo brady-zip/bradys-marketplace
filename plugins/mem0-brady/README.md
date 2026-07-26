@@ -46,17 +46,25 @@ server yourself, choose the **external** stack instead and the plugin installs n
 
 | | `managed` (default) | `external` |
 |---|---|---|
-| Qdrant | native binary under launchd, ports from config (default `6433`/`6434`) | yours (e.g. docker-compose) |
+| Qdrant | native binary under launchd, ports from config (default `6433`/`6434`) | yours, never contacted from the host |
 | MCP server | launchd, port from config (default `8788`) | yours |
-| setup installs | console scripts, Qdrant binary, 2 launchd agents, config | console scripts + config only |
-| storage | `~/.local/share/mem0-brady/qdrant-storage` | yours |
+| how hooks reach mem0 | in-process (`mem0.Memory`) | through the MCP server |
+| setup installs | console scripts + mem0 + models, Qdrant binary, 2 launchd agents | an MCP client and a two-line config |
+| host needs an API key | yes | **no** — the server holds it |
+| install size | multi-GB (mem0ai, torch, spaCy, fastembed) | ~70MB |
 
-The one constraint that catches people on `external`: the recall/capture hooks instantiate
-mem0 **directly** rather than calling the MCP server, so `MEM0_QDRANT_URL` has to be reachable
-from your shell. A docker-compose Qdrant that only `expose`s its port to the container network
-is invisible to them no matter how healthy the MCP server looks — publish it on loopback
-(`ports: ["127.0.0.1:6333:6333"]`). Setup hard-fails on this rather than leaving recall
-silently dead at every SessionStart.
+On `external`, the hooks drive mem0 **through the server**, so the server owns the Qdrant URL,
+the collection, the `user_id`, the embedding model and the API key. None of them are configured
+on the host — a duplicate would just be a second copy to keep in sync, and a stale one fails
+by quietly reading a different store. The whole config is:
+
+```
+MEM0_BRADY_STACK=external
+MEM0_BRADY_MCP_URL=http://127.0.0.1:8081/mcp
+```
+
+Hooks fail **open**: a slow or unreachable server skips recall/capture and lets the session
+continue, rather than blocking it.
 
 Moving between stacks — or merging a second machine's memories into one shared store — is
 `/mem0-brady:migrate`. Setup refuses to switch an install to `external` while managed-stack
@@ -236,9 +244,9 @@ Verify any time with:
 
 Run `/mem0-brady:doctor` first — it pinpoints which layer is broken and prints the fix.
 
-- **Qdrant not reachable** — managed: check `~/.local/share/mem0-brady/qdrant.log`, then re-run
-  `/mem0-brady:setup`. External: make sure the port is published **on the host**, not only to a
-  container network — the hooks bypass the MCP server and talk to Qdrant directly.
+- **Qdrant not reachable** — managed only: check `~/.local/share/mem0-brady/qdrant.log`, then
+  re-run `/mem0-brady:setup`. An external install never contacts Qdrant from the host, so this
+  cannot be your problem there; check the MCP server instead.
 - **MCP server not reachable** — managed: check `~/.local/share/mem0-brady/server.log`, then
   re-run `/mem0-brady:setup`. (The server connects to Qdrant lazily on the first tool call, so
   Qdrant must be up first — setup orders them correctly.) External: start your own server.

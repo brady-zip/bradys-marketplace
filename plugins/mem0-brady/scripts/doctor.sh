@@ -58,6 +58,11 @@ MCP_URL="${MEM0_BRADY_MCP_URL:-$(env_get MEM0_BRADY_MCP_URL)}"
 MCP_URL="${MCP_URL:-http://127.0.0.1:8788/mcp}"
 COLLECTION="$(env_get MEM0_COLLECTION)"; COLLECTION="${COLLECTION:-mem0_brady}"
 USER_ID="$(env_get MEM0_USER_ID)"; USER_ID="${USER_ID:-shared-bch}"
+# An external stack drives mem0 through the server, so this host holds no key,
+# no store identity and no mem0 install. Checking for them would report a
+# healthy install as broken.
+MCP_MODE=0
+[ "$STACK" = "external" ] && MCP_MODE=1
 
 print_header() { printf "\n${BOLD}%s${NC}\n" "$1"; printf '%s\n' "------------------------------------------------------------"; }
 pass() { printf "  ${GREEN}OK${NC}      %s\n" "$1"; }
@@ -100,16 +105,24 @@ fi
 # --- Stack + identity --------------------------------------------------------
 print_header "Stack + store identity"
 pass "stack: ${STACK}"
-pass "collection: ${COLLECTION}   user_id: ${USER_ID}"
-pass "qdrant: ${QDRANT_URL}"
 pass "mcp:    ${MCP_URL}"
+if [ "$MCP_MODE" = "1" ]; then
+  pass "store identity, embeddings and API key: owned by the server"
+else
+  pass "collection: ${COLLECTION}   user_id: ${USER_ID}"
+  pass "qdrant: ${QDRANT_URL}"
+fi
 
 # --- Config ------------------------------------------------------------------
 print_header "Config (required)"
 if [ -f "$ENV_FILE" ]; then
   pass "config present at ${ENV_FILE}"
-  KEY="$(grep -E '^OPENAI_API_KEY=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)"
-  if [ -n "$KEY" ] && [ "$KEY" != "__OPENAI_API_KEY__" ]; then pass "OPENAI_API_KEY is set"; else fail_required "OPENAI_API_KEY missing/placeholder in ${ENV_FILE}" "Run /mem0-brady:setup."; fi
+  if [ "$MCP_MODE" = "1" ]; then
+    pass "no OPENAI_API_KEY needed — the server holds it"
+  else
+    KEY="$(grep -E '^OPENAI_API_KEY=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)"
+    if [ -n "$KEY" ] && [ "$KEY" != "__OPENAI_API_KEY__" ]; then pass "OPENAI_API_KEY is set"; else fail_required "OPENAI_API_KEY missing/placeholder in ${ENV_FILE}" "Run /mem0-brady:setup."; fi
+  fi
   PERMS="$(stat -f '%Lp' "$ENV_FILE" 2>/dev/null || true)"
   [ "$PERMS" = "600" ] && pass "permissions 600" || fail_optional "permissions ${PERMS:-unknown} (expected 600)" "chmod 600 ${ENV_FILE}"
 else
@@ -133,6 +146,9 @@ fi
 
 # --- Qdrant server -----------------------------------------------------------
 print_header "Qdrant server (required)"
+if [ "$MCP_MODE" = "1" ]; then
+  pass "not contacted from this host — the server reaches it"
+else
 CODE="$(http_code "${QDRANT_URL}/readyz")"
 if [ "$CODE" != "000" ]; then
   pass "Qdrant reachable at ${QDRANT_URL} (HTTP ${CODE})"
@@ -158,8 +174,9 @@ else
     fail_required "Qdrant not reachable at ${QDRANT_URL}" "Check ${DATA_DIR}/qdrant.log; re-run /mem0-brady:setup."
   else
     fail_required "Qdrant not reachable at ${QDRANT_URL}" \
-      "Start your external stack. The hooks talk to Qdrant DIRECTLY, so it must be published on the host — a container-network-only port is invisible to them (docker-compose: ports: [\"127.0.0.1:6333:6333\"])."
+      "Start your external stack, or point MEM0_QDRANT_URL at a reachable Qdrant."
   fi
+fi
 fi
 
 # --- MCP server --------------------------------------------------------------
@@ -190,6 +207,9 @@ fi
 
 # --- Reranker (optional) -----------------------------------------------------
 print_header "Reranker (optional)"
+if [ "$MCP_MODE" = "1" ]; then
+  pass "server-side concern — this host runs no retrieval"
+else
 RERANK_PROVIDER=""
 [ -f "$ENV_FILE" ] && RERANK_PROVIDER="$(grep -E '^MEM0_RERANK_PROVIDER=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)"
 if [ -z "$RERANK_PROVIDER" ]; then
@@ -210,6 +230,7 @@ else
   else
     fail_optional "sentence-transformers not importable in the tool venv" "Re-run /mem0-brady:setup (reinstalls the fork with reranker deps)."
   fi
+fi
 fi
 
 # --- Workstreams (optional) --------------------------------------------------

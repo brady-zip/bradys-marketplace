@@ -11,18 +11,19 @@
 #       - the mem0 MCP server under launchd, pointed at that Qdrant
 #
 #   external — you already run Qdrant + the mem0 MCP server (e.g. docker-compose).
-#       Setup installs ONLY the console scripts and the config. It downloads no
-#       Qdrant binary and loads no launchd agents.
+#       The hooks then drive mem0 THROUGH that server, so this host needs no
+#       Qdrant reachability, no API key, no store identity and no mem0 install
+#       — the server owns all of it. Setup writes a two-line config and a small
+#       MCP-only tool install. No Qdrant binary, no launchd agents.
 #
-# Store identity (collection / user_id / URLs) is per-INSTALL, prompted here and
-# stored in the config — it is NOT baked into the plugin. Point two machines at
-# the same values and they share one memory.
+# For a managed stack, store identity (collection / user_id / URLs) is
+# per-INSTALL, prompted here and stored in the config — never baked into the
+# plugin. Point two machines at the same values and they share one memory.
 #
-# Both the MCP server and the SessionStart/Stop hooks connect to Qdrant over
-# HTTP, so the store supports concurrent / multi-session access (an embedded
-# on-disk store can't — it takes an exclusive per-process lock). The hooks talk
-# to Qdrant DIRECTLY, not via the MCP server, which is why an external stack
-# must publish Qdrant's port on the host and not merely to a container network.
+# On a MANAGED stack the server and the hooks both connect to Qdrant over HTTP,
+# so the store supports concurrent / multi-session access (an embedded on-disk
+# store can't — it takes an exclusive per-process lock). On an external stack
+# the hooks reach Qdrant only through the server, so the host never needs it.
 #
 # Idempotent: re-running re-installs the tool, MERGES (never clobbers) the
 # config, and re-bootstraps the launchd agents it owns.
@@ -192,6 +193,11 @@ case "$STACK" in
   *) die "MEM0_BRADY_STACK must be 'managed' or 'external' (got '${STACK}')" ;;
 esac
 
+# An external stack talks MCP, which is what makes the rest of this section
+# unnecessary there: the server already holds every value it would ask for.
+MCP_MODE=0
+[ "$STACK" = "external" ] && MCP_MODE=1
+
 QDRANT_HTTP_PORT="$(env_get MEM0_BRADY_QDRANT_HTTP_PORT "$ENV_FILE")"
 QDRANT_HTTP_PORT="${QDRANT_HTTP_PORT:-$DEFAULT_QDRANT_HTTP_PORT}"
 QDRANT_GRPC_PORT="$(env_get MEM0_BRADY_QDRANT_GRPC_PORT "$ENV_FILE")"
@@ -209,18 +215,24 @@ else
   DEF_MCP_URL="http://127.0.0.1:8081/mcp"
 fi
 
-QDRANT_URL="${MEM0_BRADY_QDRANT_URL:-$(env_get MEM0_QDRANT_URL "$ENV_FILE")}"
-[ -n "$QDRANT_URL" ] || QDRANT_URL="$(ask "Qdrant URL" "$DEF_QDRANT_URL")"
 MCP_URL="${MEM0_BRADY_MCP_URL:-$(env_get MEM0_BRADY_MCP_URL "$ENV_FILE")}"
 [ -n "$MCP_URL" ] || MCP_URL="$(ask "mem0 MCP URL (what clients connect to)" "$DEF_MCP_URL")"
-MCP_PORT="$(env_get MEM0_PORT "$ENV_FILE")"
-MCP_PORT="${MCP_PORT:-$DEF_MCP_PORT}"
-COLLECTION="${MEM0_BRADY_COLLECTION:-$(env_get MEM0_COLLECTION "$ENV_FILE")}"
-[ -n "$COLLECTION" ] || COLLECTION="$(ask "Qdrant collection" "$DEFAULT_COLLECTION")"
-USER_ID="${MEM0_BRADY_USER_ID:-$(env_get MEM0_USER_ID "$ENV_FILE")}"
-[ -n "$USER_ID" ] || USER_ID="$(ask "shared user_id (the namespace every actor reads)" "$DEFAULT_USER_ID")"
-say "identity: collection=${COLLECTION} user_id=${USER_ID}"
-say "qdrant=${QDRANT_URL}  mcp=${MCP_URL}"
+
+if [ "$MCP_MODE" = "1" ]; then
+  say "mcp=${MCP_URL}"
+  say "store identity, embeddings and API key: owned by the server, not configured here"
+else
+  QDRANT_URL="${MEM0_BRADY_QDRANT_URL:-$(env_get MEM0_QDRANT_URL "$ENV_FILE")}"
+  [ -n "$QDRANT_URL" ] || QDRANT_URL="$(ask "Qdrant URL" "$DEF_QDRANT_URL")"
+  MCP_PORT="$(env_get MEM0_PORT "$ENV_FILE")"
+  MCP_PORT="${MCP_PORT:-$DEF_MCP_PORT}"
+  COLLECTION="${MEM0_BRADY_COLLECTION:-$(env_get MEM0_COLLECTION "$ENV_FILE")}"
+  [ -n "$COLLECTION" ] || COLLECTION="$(ask "Qdrant collection" "$DEFAULT_COLLECTION")"
+  USER_ID="${MEM0_BRADY_USER_ID:-$(env_get MEM0_USER_ID "$ENV_FILE")}"
+  [ -n "$USER_ID" ] || USER_ID="$(ask "shared user_id (the namespace every actor reads)" "$DEFAULT_USER_ID")"
+  say "identity: collection=${COLLECTION} user_id=${USER_ID}"
+  say "qdrant=${QDRANT_URL}  mcp=${MCP_URL}"
+fi
 
 # --- Guard: don't silently strand a managed store ----------------------------
 # Switching an install that already has managed-stack memories over to an
@@ -257,11 +269,19 @@ printf "  installing from %s ...\n" "${SERVER_DIR}"
 # The en_core_web_sm model is pinned as a wheel `--with` so it lands in the
 # uv-managed tool venv (a `python -m spacy download` shells out to pip, which
 # uv intercepts and fails). Track SPACY_MODEL_URL to spaCy's major.minor.
-uv tool install --force \
-  --with "mem0ai[extras,nlp]" \
-  --with "sentence-transformers>=5" \
-  --with "${SPACY_MODEL_URL}" \
-  "${SERVER_DIR}" >/dev/null 2>&1 || die "uv tool install failed for ${SERVER_DIR}"
+if [ "$MCP_MODE" = "1" ]; then
+  # MCP mode drives mem0 through the server, so the hooks never import mem0 —
+  # skip the `direct` extra and every model dependency behind it. This is the
+  # difference between a ~70MB install and a multi-GB one.
+  uv tool install --force "${SERVER_DIR}" >/dev/null 2>&1 \
+    || die "uv tool install failed for ${SERVER_DIR}"
+else
+  uv tool install --force \
+    --with "mem0ai[extras,nlp]" \
+    --with "sentence-transformers>=5" \
+    --with "${SPACY_MODEL_URL}" \
+    "${SERVER_DIR}[direct]" >/dev/null 2>&1 || die "uv tool install failed for ${SERVER_DIR}"
+fi
 export PATH="${UV_BIN}:${PATH}"
 for bin in mem0-mcp-selfhosted mem0-hook-context mem0-hook-stop; do
   command -v "$bin" >/dev/null 2>&1 || die "$bin not on PATH after install (expected in ${UV_BIN})"
@@ -274,6 +294,9 @@ say "console scripts installed: mem0-mcp-selfhosted, mem0-hook-context, mem0-hoo
 # below), and a cold download could blow the readiness wait at the end.
 # Cache is user-global (~/.cache/huggingface), shared with the launchd server.
 # Best-effort: warn, never die — the server can still fetch it lazily.
+if [ "$MCP_MODE" = "1" ]; then
+  say "skipping reranker pre-cache — the server does its own retrieval"
+else
 RERANK_MODEL="cross-encoder/ms-marco-MiniLM-L-6-v2"
 TOOL_PY="$(uv tool dir 2>/dev/null)/mem0-mcp-selfhosted/bin/python"
 printf "  pre-caching reranker model %s ...\n" "$RERANK_MODEL"
@@ -281,6 +304,7 @@ if [ -x "$TOOL_PY" ] && "$TOOL_PY" -c "import sys; from sentence_transformers im
   say "reranker model cached (${RERANK_MODEL})"
 else
   warn "reranker model pre-cache failed — the server will fetch it (~80MB) on first boot"
+fi
 fi
 
 # --- Install the native Qdrant server binary (managed only) ------------------
@@ -316,6 +340,10 @@ fi
 
 # --- OpenAI key --------------------------------------------------------------
 step "OpenAI API key"
+OPENAI_KEY=""
+if [ "$MCP_MODE" = "1" ]; then
+  say "not needed — the server owns the key (embeddings, extraction, synthesis)"
+else
 EXISTING_KEY="$(env_get OPENAI_API_KEY "$ENV_FILE")"
 if [ -n "$EXISTING_KEY" ] && [ "$EXISTING_KEY" != "__OPENAI_API_KEY__" ]; then
   say "reusing existing key from ${ENV_FILE}"
@@ -330,6 +358,7 @@ else
     *) die "that doesn't look like an OpenAI key (expected to start with 'sk-')" ;;
   esac
 fi
+fi
 
 # --- Create dirs + merge config ----------------------------------------------
 step "Config + data dirs"
@@ -338,6 +367,18 @@ mkdir -p "$CONFIG_DIR" "$LA_DIR"
 
 RENDERED="$(mktmp)"
 trap 'rm -f "$RENDERED"' EXIT
+# MCP mode has its own, deliberately tiny template: every value the managed one
+# carries is owned by the server, and a stale duplicate here would fail by
+# quietly reading a different store.
+if [ "$MCP_MODE" = "1" ]; then
+  TEMPLATE="${TEMPLATES}/env.external.template"
+else
+  TEMPLATE="${TEMPLATES}/env.template"
+fi
+# Unset in MCP mode — the external template has no placeholders for them, but
+# the awk call below still expands the variables, and `set -u` would abort.
+COLLECTION="${COLLECTION:-}"; USER_ID="${USER_ID:-}"
+QDRANT_URL="${QDRANT_URL:-}"; MCP_PORT="${MCP_PORT:-}"
 KEY="$OPENAI_KEY" STACK_V="$STACK" COLLECTION_V="$COLLECTION" USER_ID_V="$USER_ID" \
 QDRANT_URL_V="$QDRANT_URL" MCP_URL_V="$MCP_URL" MCP_PORT_V="$MCP_PORT" \
 QHTTP_V="$QDRANT_HTTP_PORT" QGRPC_V="$QDRANT_GRPC_PORT" \
@@ -352,7 +393,7 @@ awk '{
   gsub(/__QDRANT_HTTP_PORT__/,   ENVIRON["QHTTP_V"]);
   gsub(/__QDRANT_GRPC_PORT__/,   ENVIRON["QGRPC_V"]);
   print
-}' "${TEMPLATES}/env.template" > "$RENDERED"
+}' "$TEMPLATE" > "$RENDERED"
 
 if [ -f "$ENV_FILE" ]; then
   # MERGE, never clobber. Values resolved above already reflect the existing
@@ -363,6 +404,9 @@ if [ -f "$ENV_FILE" ]; then
   # bug this replaces.
   MERGED="$(mktmp)"
   cp "$ENV_FILE" "$MERGED"
+  # Only keys the CHOSEN template defines are rewritten, so switching a managed
+  # install to external leaves its old identity keys in place, inert, rather
+  # than deleting values you may still want if you switch back.
   for k in MEM0_BRADY_STACK MEM0_COLLECTION MEM0_USER_ID MEM0_QDRANT_URL \
            MEM0_BRADY_MCP_URL MEM0_PORT MEM0_BRADY_QDRANT_HTTP_PORT \
            MEM0_BRADY_QDRANT_GRPC_PORT OPENAI_API_KEY; do
@@ -416,18 +460,16 @@ if [ "$STACK" = "managed" ]; then
 else
   step "launchd agents"
   say "skipped — external stack (you run the MCP server yourself)"
-  # The hooks reach Qdrant directly, so a container-network-only Qdrant is
-  # invisible to them no matter how healthy the MCP server looks. Fail loudly
-  # here rather than leaving recall silently dead at every SessionStart.
-  if [ "$(http_code "${QDRANT_URL}/collections")" = "000" ]; then
-    printf "  ${RED}FAIL${NC} Qdrant is not reachable at %s from this shell.\n" "$QDRANT_URL" >&2
-    printf "        The recall/capture hooks talk to Qdrant DIRECTLY, so it must be\n" >&2
-    printf "        published on the host — exposing it only to a container network\n" >&2
-    printf "        is not enough. For docker-compose, publish it on loopback:\n" >&2
-    printf "          ${BLUE}ports: [\"127.0.0.1:6333:6333\"]${NC}\n" >&2
+  # The hooks reach mem0 only through the server now, so the server — not
+  # Qdrant — is what has to answer from this shell.
+  if [ "$(http_code "$MCP_URL")" = "000" ]; then
+    printf "  ${RED}FAIL${NC} the mem0 MCP server is not reachable at %s.\n" "$MCP_URL" >&2
+    printf "        Start your external stack, then re-run. Everything else this\n" >&2
+    printf "        install needs — Qdrant, the store identity, the API key — lives\n" >&2
+    printf "        behind that server and is never contacted from here.\n" >&2
     exit 1
   fi
-  say "Qdrant reachable at ${QDRANT_URL}"
+  say "mem0 MCP server reachable at ${MCP_URL}"
 fi
 
 # --- Verify the store matches this config ------------------------------------
@@ -435,6 +477,9 @@ fi
 # configured install at it yields confusing runtime errors deep inside mem0.
 # Catch it here, where the fix is obvious.
 step "Verify store"
+if [ "$MCP_MODE" = "1" ]; then
+  say "skipped — the server owns the collection and validates it itself"
+else
 COLL_JSON="$(curl -s --max-time 5 "${QDRANT_URL}/collections/${COLLECTION}" 2>/dev/null || true)"
 if printf '%s' "$COLL_JSON" | jq -e '.result' >/dev/null 2>&1; then
   HAVE_DIMS="$(printf '%s' "$COLL_JSON" | jq -r '.result.config.params.vectors.size // empty')"
@@ -446,6 +491,7 @@ if printf '%s' "$COLL_JSON" | jq -e '.result' >/dev/null 2>&1; then
   say "collection '${COLLECTION}' exists (${POINTS} memories, ${HAVE_DIMS:-?} dims)"
 else
   say "collection '${COLLECTION}' does not exist yet — created on first write"
+fi
 fi
 
 # --- Wait for the MCP server -------------------------------------------------
@@ -463,8 +509,17 @@ fi
 printf "\n${GREEN}${BOLD}mem0-brady is set up.${NC}\n"
 printf "  • Stack:         %s\n" "$STACK"
 printf "  • Config:        %s\n" "$ENV_FILE"
-printf "  • Qdrant:        %s\n" "$QDRANT_URL"
-printf "  • Store:         collection %s, user_id %s\n" "$COLLECTION" "$USER_ID"
+printf "  • MCP server:    %s\n" "$MCP_URL"
+if [ "$MCP_MODE" = "1" ]; then
+  # QDRANT_URL / COLLECTION / USER_ID are never set in this mode — the server
+  # owns them, and under `set -u` printing them would abort the run.
+  printf "  • Qdrant:        via the server (not contacted from this host)\n"
+  printf "  • Store:         owned by the server\n"
+  printf "  • Install:       MCP client only — no mem0, no models, no API key\n"
+else
+  printf "  • Qdrant:        %s\n" "$QDRANT_URL"
+  printf "  • Store:         collection %s, user_id %s\n" "$COLLECTION" "$USER_ID"
+fi
 if [ "$STACK" = "managed" ]; then
   printf "  • Memory store:  %s (local, per-machine)\n" "$QDRANT_STORAGE"
   printf "  • Logs:          %s/{qdrant,server}.log\n" "$DATA_DIR"
