@@ -44,8 +44,33 @@ logger = logging.getLogger(__name__)
 _memory = None
 
 _MAX_MEMORIES = 20
-_MIN_USER_LEN = 20
-_MIN_ASSISTANT_LEN = 50
+
+
+def _int_env(name: str, default: int) -> int:
+    """Read a non-negative int from the environment, falling back on garbage."""
+    try:
+        value = int(os.environ.get(name, "").strip() or default)
+    except ValueError:
+        return default
+    return value if value >= 0 else default
+
+
+# Capture thresholds. Tunable from the config so trimming a noisy store does not
+# mean editing the fork. The comparison is AND, so a turn is skipped only when
+# BOTH sides are small — these are floors for "did anything happen", not budgets.
+_MIN_USER_LEN = _int_env("MEM0_MIN_USER_LEN", 200)
+_MIN_ASSISTANT_LEN = _int_env("MEM0_MIN_ASSISTANT_LEN", 500)
+
+# Minimum seconds between two memory writes for the same cwd. The Stop hook
+# fires on EVERY assistant turn, so without this, capture volume scales with
+# turn count rather than with information: a two-minute exchange produced 19
+# extracted facts, mostly near-duplicates of each other, because consecutive
+# captures re-read an overlapping transcript window.
+#
+# This gates ONLY the memory write. The handoff file is still refreshed every
+# turn — it is a single overwritten file, costs nothing, and is what makes
+# resume work. 0 disables the debounce.
+_CAPTURE_MIN_INTERVAL = _int_env("MEM0_CAPTURE_MIN_INTERVAL", 900)
 _MAX_CONTENT_LEN = 4000
 _RECENT_WINDOW = 6  # last ~3 exchanges (user+assistant pairs)
 
@@ -372,6 +397,37 @@ def _handoff_path_for(cwd: str, project_name: str) -> Path:
     return _handoff_dir() / f"{safe}-{digest}.md"
 
 
+def _last_capture_path(cwd: str, project_name: str) -> Path:
+    """Marker recording when this cwd last WROTE A MEMORY.
+
+    Separate from the handoff file, whose mtime tracks the last *handoff*
+    refresh — which now happens every turn even when no memory is written.
+    """
+    return _handoff_path_for(cwd, project_name).with_suffix(".last-capture")
+
+
+def _capture_is_debounced(cwd: str, project_name: str) -> bool:
+    """True when a memory was written for this cwd too recently to write again."""
+    if _CAPTURE_MIN_INTERVAL <= 0:
+        return False
+    marker = _last_capture_path(cwd, project_name)
+    try:
+        age = datetime.now(timezone.utc).timestamp() - marker.stat().st_mtime
+    except (OSError, ValueError):
+        return False  # no marker yet, or unreadable — capture
+    return age < _CAPTURE_MIN_INTERVAL
+
+
+def _mark_captured(cwd: str, project_name: str) -> None:
+    """Stamp the debounce marker. Best-effort: never break capture over it."""
+    try:
+        marker = _last_capture_path(cwd, project_name)
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.touch()
+    except OSError:
+        logger.debug("could not stamp capture marker", exc_info=True)
+
+
 def _git_status_block(cwd: str) -> str:
     """Best-effort ``git status -sb`` (truncated) for the handoff appendix.
 
@@ -681,8 +737,14 @@ def _capture_summary(
         f"Session summary for project '{project_name}':\n\n"
         + "\n\n".join(exchanges)
         + "\n\n"
-        "Extract key decisions, solutions found, patterns discovered, "
-        "configuration changes, and important context for future sessions."
+        "Extract only DURABLE facts a future session would need and could not "
+        "rediscover cheaply: configuration values, endpoints, versions, ids, "
+        "architectural decisions and the reasoning behind them, and gotchas "
+        "that cost time. Prefer few, dense, self-contained facts.\n"
+        "Do NOT extract narration about this conversation — no 'the user asked/"
+        "confirmed/was told', no progress reports, no restating what was just "
+        "done unless the outcome itself is a durable fact. If nothing meets "
+        "that bar, extract nothing."
     )
 
     metadata: dict = {"source": source, "session_id": session_id}
@@ -702,12 +764,19 @@ def _capture_summary(
         metadata["workstream_id"] = workstream["slug"]
 
     mem = _get_client()
-    mem.add(
-        messages=[{"role": "user", "content": summary}],
-        user_id=_get_user_id(),
-        infer=True,
-        metadata=metadata,
-    )
+    # Debounced: the handoff below still refreshes every turn, but the memory
+    # write is rate-limited per cwd so a long session does not bury the store
+    # in near-duplicate extractions of an overlapping transcript window.
+    if _capture_is_debounced(cwd, project_name):
+        logger.debug("capture debounced for %s", cwd)
+    else:
+        mem.add(
+            messages=[{"role": "user", "content": summary}],
+            user_id=_get_user_id(),
+            infer=True,
+            metadata=metadata,
+        )
+        _mark_captured(cwd, project_name)
 
     # Resume-recap handoff (reuses the messages already read + the same mem
     # instance). Fail-open inside _write_handoff.
