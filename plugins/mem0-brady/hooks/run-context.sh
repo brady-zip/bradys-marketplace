@@ -11,39 +11,13 @@
 # broken. We mirror that by not hard-failing if the target is absent.
 set -uo pipefail
 
-ENV_FILE="${MEM0_BRADY_ENV:-$HOME/.config/mem0-brady/.env}"
-if [ -f "$ENV_FILE" ]; then
-  set -a
-  # shellcheck disable=SC1090
-  . "$ENV_FILE"
-  set +a
-fi
-
-# Recall via the MCP server instead of an in-process mem0 client, when this
-# install points at an external stack. The server already holds the Qdrant URL,
-# collection, user_id and API key, and is long-lived, so recall neither
-# duplicates that config on the host nor pays a cold Memory init per hook
-# process. The fork reads MEM0_MCP_URL; the plugin stores it under its own
-# namespaced key, so bridge the two here.
-# Managed stacks stay on the direct client — unchanged behaviour.
-if [ "${MEM0_BRADY_STACK:-managed}" = "external" ] && [ -n "${MEM0_BRADY_MCP_URL:-}" ]; then
-  export MEM0_MCP_URL="$MEM0_BRADY_MCP_URL"
-fi
-
-export PATH="$HOME/.local/bin:$PATH"
-
-# --- Domain partition (app_id) for this session ---
-# Mirrors mem0_domain_for_cwd from ~/.claude/hooks/mem0/config.sh: any path with
-# an "evergreen" segment is the evergreen domain; everything else is "general".
-# CLAUDE_PROJECT_DIR is set by Claude Code for hooks; fall back to PWD.
-# MEM0_RECALL_APP_IDS scopes recall to this domain (the fork's context_main
-# filters per app_id when it's set).
-case "${CLAUDE_PROJECT_DIR:-$PWD}" in
-  *evergreen*) _mem0_domain=evergreen ;;
-  *) _mem0_domain=general ;;
-esac
-export MEM0_APP_ID="$_mem0_domain"
-export MEM0_RECALL_APP_IDS="$_mem0_domain"
+# Config file, MCP-URL bridge, PATH, and every mem0 scope for this session.
+# MEM0_RECALL_APP_IDS scopes recall to this session's partition(s) — the fork's
+# context_main filters per app_id when it's set. See lib-scope.sh for the
+# resolution order (env > repo .mem0-brady.json > machine rules > default).
+# shellcheck source=lib-scope.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib-scope.sh"
+mem0_scope_init
 
 # Capture-tee-replay: run the fork hook on the original stdin, log what it
 # injected (for /mem0-brady:digest), then replay its exact output to Claude.
