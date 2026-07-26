@@ -22,6 +22,11 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from mem0_mcp_selfhosted.handoff_prompt import (
+    build_handoff_prompt,
+    coerce_completion,
+)
+
 # Load .env early so _get_user_id() sees MEM0_USER_ID even when it's
 # called before _get_memory().  load_dotenv(override=False) is the
 # default — it never clobbers values already in os.environ.
@@ -121,7 +126,7 @@ def _get_memory():
     return _memory
 
 
-def _get_search_memory():
+def _get_client():
     """Return the client to use for RECALL-only paths.
 
     Prefers the MCP server when MEM0_MCP_URL is set. The server already holds
@@ -133,13 +138,14 @@ def _get_search_memory():
     Falls back to the in-process client when unset, so nothing changes for a
     managed/local stack.
 
-    NOT for capture: Stop/PreCompact need ``.add`` and the raw ``.llm`` for
-    handoff synthesis, and no MCP tool exposes an LLM completion yet. Those
-    keep calling _get_memory().
+    Serves every path — recall *and* capture. The shim covers ``search`` and
+    ``add``, and stands in for the raw ``mem.llm`` handoff synthesis via the
+    server's ``synthesize_handoff`` tool, so an external stack needs no LLM
+    provider, API key or mem0 install on the host at all.
     """
-    from mem0_mcp_selfhosted.mcp_client import get_search_client
+    from mem0_mcp_selfhosted.mcp_client import get_client
 
-    client = get_search_client()
+    client = get_client()
     return client if client is not None else _get_memory()
 
 
@@ -233,7 +239,7 @@ def context_main() -> None:
         user_id = _get_user_id()
         recall_app_ids = _get_recall_app_ids()
 
-        mem = _get_search_memory()
+        mem = _get_client()
 
         # Multi-query, multi-app_id search merged/deduped by id. NOTE(fork):
         # mem0ai 2.x search(query, *, top_k, filters, ...) takes entity scopes
@@ -544,44 +550,34 @@ def _synthesize_handoff(
     # the index of sibling pieces) into the synthesis so this per-cwd recap is
     # situated within the larger, multi-session objective. Per-piece current
     # state stays in each piece's own handoff — referenced, never inlined here.
-    workstream_block = ""
-    workstream_hint = ""
+    workstream_overview = ""
     if workstream and workstream.get("slug"):
-        overview = _workstream_overview(workstream["slug"])
-        if overview:
-            workstream_block = (
-                f"## Active workstream '{workstream['slug']}' "
-                f"(overarching, multi-session context):\n{overview}\n\n"
-            )
-            workstream_hint = (
-                " This session is part of the workstream above — keep the Goal "
-                "consistent with its overarching objective, and do not restate "
-                "sibling pieces' state (that lives in their own handoffs)."
-            )
+        workstream_overview = _workstream_overview(workstream["slug"]) or ""
 
-    prompt = (
-        "You are writing a terse resume handoff so a future agent (or the same "
-        "user returning to a cold context) can pick up a coding session "
-        "immediately. Be concrete: name files, PR numbers, identifiers.\n\n"
-        f"{workstream_block}"
-        f"## Previous handoff (the recap you are updating):\n{previous_block}\n\n"
-        f"## Recent conversation (oldest first), project '{project_name}':\n"
-        f"{convo}\n\n"
-        f"## Relevant long-term memory:\n{recalled_block}\n\n"
-        "Treat the previous handoff as prior state: carry forward goals and "
-        "watch-outs that still hold, update State/Next from the recent "
-        "conversation, and drop anything now done. Do not copy it verbatim."
-        f"{workstream_hint}\n\n"
-        "Write markdown under ~180 words, omitting any section that does not "
-        "apply, with these headers:\n"
-        "- **Goal** — the overarching objective in one sentence.\n"
-        "- **State** — what is done/shipped so far (bullets).\n"
-        "- **Next** — the immediate next step(s).\n"
-        "- **Watch out** — gotchas, blockers, or pending user decisions.\n"
-        "Start directly with the **Goal** line — no document title, no "
-        "preamble, no closing remarks."
+    # Both execution paths share one prompt template (handoff_prompt), so a
+    # recap cannot change character depending on which one ran.
+    ws_slug = workstream.get("slug") if workstream else ""
+
+    synth = getattr(mem, "synthesize_handoff", None)
+    if synth is not None:
+        # Server-side: the host has no LLM provider or API key of its own.
+        return synth(
+            conversation=convo,
+            project_name=project_name,
+            previous_handoff=previous_block,
+            recalled=recalled_block,
+            workstream_overview=workstream_overview,
+            workstream_slug=ws_slug or "",
+        )
+
+    prompt = build_handoff_prompt(
+        conversation=convo,
+        project_name=project_name,
+        previous_handoff=previous_block,
+        recalled=recalled_block,
+        workstream_overview=workstream_overview,
+        workstream_slug=ws_slug or "",
     )
-
     try:
         resp = mem.llm.generate_response(
             messages=[{"role": "user", "content": prompt}]
@@ -589,12 +585,7 @@ def _synthesize_handoff(
     except Exception:
         logger.debug("handoff synthesis failed", exc_info=True)
         return ""
-
-    # generate_response returns a str on the no-tools path across providers,
-    # but be defensive about a dict-shaped return.
-    if isinstance(resp, dict):
-        resp = resp.get("content") or resp.get("text") or ""
-    return (resp or "").strip()
+    return coerce_completion(resp)
 
 
 def _write_handoff(
@@ -710,7 +701,7 @@ def _capture_summary(
     if workstream:
         metadata["workstream_id"] = workstream["slug"]
 
-    mem = _get_memory()
+    mem = _get_client()
     mem.add(
         messages=[{"role": "user", "content": summary}],
         user_id=_get_user_id(),
@@ -825,7 +816,7 @@ def prompt_main() -> None:
 
         # Resume-intent → actually pre-search mem0 and inject.
         if _RESUME_RE.search(prompt):
-            mem = _get_search_memory()
+            mem = _get_client()
             mems = _search_scoped(
                 mem,
                 queries=[
@@ -909,7 +900,7 @@ def file_context_main() -> None:
         basename = p.name
         query = f"{rel} {basename}" if rel != basename else rel
 
-        mem = _get_search_memory()
+        mem = _get_client()
         mems = _search_scoped(
             mem,
             queries=[query],

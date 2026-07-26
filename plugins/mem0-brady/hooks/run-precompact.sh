@@ -17,6 +17,15 @@ if [ -f "$ENV_FILE" ]; then
   set +a
 fi
 
+# Capture via the MCP server when this install points at an external stack:
+# the server performs the memory write AND the handoff synthesis (its
+# synthesize_handoff tool), so the host needs no LLM provider or API key. All
+# file IO — transcript read, handoff write — stays here, on the host.
+# The fork reads MEM0_MCP_URL; bridge the plugin's namespaced key onto it.
+if [ "${MEM0_BRADY_STACK:-managed}" = "external" ] && [ -n "${MEM0_BRADY_MCP_URL:-}" ]; then
+  export MEM0_MCP_URL="$MEM0_BRADY_MCP_URL"
+fi
+
 export PATH="$HOME/.local/bin:$PATH"
 
 case "${CLAUDE_PROJECT_DIR:-$PWD}" in

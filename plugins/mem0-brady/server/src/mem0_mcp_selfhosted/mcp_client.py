@@ -20,12 +20,15 @@ long-lived, so its models are warm.
 
 Scope
 -----
-This deliberately implements only ``search`` — the surface the *recall* hooks
-use. The capture hooks (Stop / PreCompact) additionally need ``add`` and the raw
-``mem.llm`` for handoff synthesis, and no MCP tool exposes an LLM completion.
-Moving those needs a new server-side tool; until then they keep a direct client.
-``search`` here is intentionally a duck-type of ``Memory.search`` so callers
-(``_search_scoped``) cannot tell the difference.
+Covers the whole surface the hooks use: ``search`` and ``add`` (duck-typed
+against ``Memory``, so callers like ``_search_scoped`` cannot tell the
+difference) plus ``synthesize_handoff``, which stands in for the raw
+``mem.llm.generate_response`` the capture hooks used for handoff synthesis.
+
+That last one is why the server grew a ``synthesize_handoff`` tool rather than a
+general completion endpoint: this server is commonly published through a tunnel,
+where "arbitrary prompt in, text out" would be an open LLM proxy for anyone past
+the access layer.
 """
 
 from __future__ import annotations
@@ -152,7 +155,71 @@ class McpMemory:
         # falls through it to an empty list, which is the fail-open we want.
         return payload
 
+    def add(
+        self,
+        messages: list | None = None,
+        user_id: str | None = None,
+        infer: bool | None = None,
+        metadata: dict | None = None,
+        **_ignored: Any,
+    ) -> Any:
+        """Mirror ``Memory.add``, mapping its arguments onto add_memory.
 
-def get_search_client() -> McpMemory | None:
-    """An MCP-backed search client, or None when direct mode is configured."""
+        The hooks always pass a single user-role message, so it is flattened to
+        the tool's ``text`` field. ``app_id`` is carried inside ``metadata`` by
+        the callers, and the tool takes it as a named parameter, so it is lifted
+        out — leaving the rest of the metadata to travel as-is.
+        """
+        text = ""
+        for message in messages or []:
+            content = (message or {}).get("content")
+            if content:
+                text = content
+                break
+        if not text:
+            return None
+
+        metadata = dict(metadata or {})
+        args: dict[str, Any] = {"text": text}
+        app_id = metadata.pop("app_id", None)
+        if app_id:
+            args["app_id"] = app_id
+        if metadata:
+            args["metadata"] = metadata
+        if user_id:
+            args["user_id"] = user_id
+        if infer is not None:
+            args["infer"] = infer
+        return call_tool("add_memory", args)
+
+    def synthesize_handoff(
+        self,
+        conversation: str,
+        project_name: str,
+        previous_handoff: str = "",
+        recalled: str = "",
+        workstream_overview: str = "",
+        workstream_slug: str = "",
+    ) -> str:
+        """Ask the server to write the handoff recap.
+
+        Returns "" on any failure, matching the direct path's contract so the
+        caller simply skips writing the handoff file.
+        """
+        payload = call_tool(
+            "synthesize_handoff",
+            {
+                "conversation": conversation,
+                "project_name": project_name,
+                "previous_handoff": previous_handoff or None,
+                "recalled": recalled or None,
+                "workstream_overview": workstream_overview or None,
+                "workstream_slug": workstream_slug or None,
+            },
+        )
+        return payload.strip() if isinstance(payload, str) else ""
+
+
+def get_client() -> McpMemory | None:
+    """An MCP-backed client, or None when direct mode is configured."""
     return McpMemory() if mcp_url() else None
