@@ -55,6 +55,19 @@ def mcp_url() -> str:
     return os.environ.get(MCP_URL_ENV, "").strip()
 
 
+def explicit_user_id() -> str | None:
+    """The user_id this host actually configured, or None to defer to the server.
+
+    An external install has no MEM0_USER_ID on purpose — the server owns the
+    namespace. But ``hooks._get_user_id()`` falls back to the literal "user"
+    when it is unset, and forwarding that would filter recall to a namespace
+    holding nothing and, worse, write captures into it. Detecting the unset
+    case here lets the tool apply its own default, which is the whole point of
+    the server owning identity.
+    """
+    return os.environ.get("MEM0_USER_ID", "").strip() or None
+
+
 def _timeout() -> float:
     raw = os.environ.get(_TIMEOUT_ENV, "").strip()
     try:
@@ -135,10 +148,14 @@ class McpMemory:
         """
         filters = dict(filters or {})
         args: dict[str, Any] = {"query": query}
-        for key in ("user_id", "agent_id", "run_id", "app_id"):
+        filters.pop("user_id", None)  # resolved below, not passed through
+        for key in ("agent_id", "run_id", "app_id"):
             value = filters.pop(key, None)
             if value:
                 args[key] = value
+        uid = explicit_user_id()
+        if uid:
+            args["user_id"] = uid
         if filters:
             args["filters"] = filters
         if top_k is not None:
@@ -186,8 +203,9 @@ class McpMemory:
             args["app_id"] = app_id
         if metadata:
             args["metadata"] = metadata
-        if user_id:
-            args["user_id"] = user_id
+        uid = explicit_user_id()
+        if uid:
+            args["user_id"] = uid
         if infer is not None:
             args["infer"] = infer
         return call_tool("add_memory", args)
