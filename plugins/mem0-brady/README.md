@@ -1,8 +1,12 @@
 # mem0-brady
 
 B's personal self-hosted [Mem0](https://github.com/mem0ai/mem0) backbone, packaged as a Claude
-Code plugin. It is the **single memory store shared by both Claude Code and Hal** — one local
-Qdrant, one namespace (`shared-bch`), so the two actors cross-query each other's memories.
+Code plugin. It is the **single memory store shared by both Claude Code and Hal** — one
+Qdrant, one namespace, so the two actors cross-query each other's memories.
+
+Which Qdrant and which namespace are **per-install**, chosen at setup and recorded in
+`~/.config/mem0-brady/.env` — they are not baked into the plugin. Point two machines at the
+same values and they share one memory; see [Stacks](#stacks-managed-vs-external).
 
 Mem0 does **both** kinds of memory here:
 
@@ -18,6 +22,12 @@ Mem0 does **both** kinds of memory here:
   and, critically, **which recall-hook injections actually shaped the work**. Scopes to the
   current session when run mid-session, or the whole day when run in a fresh one. See
   [Digest](#digest-is-the-memory-layer-useful).
+- **`/mem0-brady:migrate`** — move a store between stacks, or merge a second machine's
+  memories into a shared one. Vectors are copied **verbatim** (no re-embedding, so no OpenAI
+  spend and no chance of the fact-extractor rewording a memory in transit), point ids are
+  preserved and memories deduped by content hash, so import is idempotent and a partial run
+  is resumable. Export/import is file-based on purpose: the two Qdrants normally live on
+  different machines, each bound to its own loopback. The source is never modified.
 - **`workstream` skill** — `/mem0-brady:workstream <slug>` groups multi-session work (spread
   across commits, branches, and worktrees) under one overarching goal: it tags the session,
   maintains a referenceable details doc, and makes the Stop/PreCompact handoffs
@@ -26,13 +36,45 @@ Mem0 does **both** kinds of memory here:
 
 (This replaced a Honcho-based passive layer — Mem0 now owns the implicit capture too.)
 
-Everything runs **locally, no Docker**: a native Qdrant server binary and the MCP server, both
-under launchd.
+Under the default **managed** stack everything runs locally with no Docker: a native Qdrant
+server binary and the MCP server, both under launchd. If you already run Qdrant and the MCP
+server yourself, choose the **external** stack instead and the plugin installs neither.
+
+## Stacks: managed vs external
+
+`MEM0_BRADY_STACK` in `~/.config/mem0-brady/.env` decides how much of the stack the plugin owns.
+
+| | `managed` (default) | `external` |
+|---|---|---|
+| Qdrant | native binary under launchd, ports from config (default `6433`/`6434`) | yours, never contacted from the host |
+| MCP server | launchd, port from config (default `8788`) | yours |
+| how hooks reach mem0 | in-process (`mem0.Memory`) | through the MCP server |
+| setup installs | console scripts + mem0 + models, Qdrant binary, 2 launchd agents | an MCP client and a two-line config |
+| host needs an API key | yes | **no** — the server holds it |
+| install size | multi-GB (mem0ai, torch, spaCy, fastembed) | ~70MB |
+
+On `external`, the hooks drive mem0 **through the server**, so the server owns the Qdrant URL,
+the collection, the `user_id`, the embedding model and the API key. None of them are configured
+on the host — a duplicate would just be a second copy to keep in sync, and a stale one fails
+by quietly reading a different store. The whole config is:
+
+```
+MEM0_BRADY_STACK=external
+MEM0_BRADY_MCP_URL=http://127.0.0.1:8081/mcp
+```
+
+Hooks fail **open**: a slow or unreachable server skips recall/capture and lets the session
+continue, rather than blocking it.
+
+Moving between stacks — or merging a second machine's memories into one shared store — is
+`/mem0-brady:migrate`. Setup refuses to switch an install to `external` while managed-stack
+data is still sitting there unmigrated.
 
 ## Memory model: one store, partitioned by `app_id`
 
-There is **one** `user_id` (`shared-bch`) that every actor reads and writes. Memory is partitioned
-into domains by an `app_id` tag, kept in the Qdrant payload:
+There is **one** `user_id` (`MEM0_USER_ID`, whatever this install set it to) that every actor
+reads and writes. Memory is partitioned into domains by an `app_id` tag, kept in the Qdrant
+payload:
 
 | Actor | Capture (write) | Recall (read filter) |
 |-------|-----------------|----------------------|
@@ -49,9 +91,10 @@ the fork hooks. Active `mcp__mem0__*` writes pass `app_id` per call (a PreToolUs
 ## How it works
 
 ```
-Claude Code ──(user-level mcpServers, http)──► http://127.0.0.1:8788/mcp
-                                       │  launchd: com.mem0brady.server
+Claude Code ──(user-level mcpServers, http)──► MEM0_BRADY_MCP_URL
+                                       │  managed: launchd com.mem0brady.server
                                        │  (uv-tool-installed mem0-mcp-selfhosted)
+                                       │  external: your own server
                                        │
 Claude hooks (this plugin):            │
   SessionStart(startup|compact) ─► run-context.sh ─► mem0-hook-context (recall) ─┐
@@ -60,16 +103,16 @@ Claude hooks (this plugin):            │
 Hal / Hermes (mem0_selfhosted         │                                          │
   provider) ──────────────────────────┤                                          │
                                        ▼                                          ▼
-                                  native Qdrant server (no Docker)  ◄─────────────┘
-                                  launchd: com.mem0brady.qdrant  →  http://127.0.0.1:6433
-                                  collection mem0_brady, user_id shared-bch
-                                  storage: ~/.local/share/mem0-brady/qdrant-storage
+                                  Qdrant at MEM0_QDRANT_URL  ◄──────────────────────┘
+                                  managed: native binary, launchd com.mem0brady.qdrant
+                                  external: yours (must be published on the host)
+                                  collection + user_id per install (see .env)
 
 Config (single source of truth): ~/.config/mem0-brady/.env
 ```
 
 The `mcp__mem0__*` tools are registered at the **user level** (`~/.claude.json` →
-`mcpServers.mem0` → `http://127.0.0.1:8788/mcp`), not via a plugin `.mcp.json` — a plugin-provided
+`mcpServers.mem0` → your `MEM0_BRADY_MCP_URL`), not via a plugin `.mcp.json` — a plugin-provided
 server would be namespaced `mcp__plugin_mem0-brady_mem0__*`, but the hooks, steer message, and
 muscle memory all expect the canonical `mcp__mem0__*`. The plugin owns the hooks + setup; the MCP
 registration is one line in `~/.claude.json`.
@@ -169,9 +212,14 @@ session started last. (`<cwd-hash>` is `sha1(cwd)[:8]`, the same scheme the hand
    ```
    /mem0-brady:setup
    ```
-4. **Register the MCP at the user level** (one line; keeps the `mcp__mem0__*` namespace):
+   A first run asks which stack backs this install (`managed` / `external`) and what store
+   to point at — collection, `user_id`, Qdrant URL, MCP URL. Later runs read those answers
+   back out of the config and stay silent. The config is **merged**, never overwritten, so
+   hand-edits survive.
+4. **Register the MCP at the user level** (one line; keeps the `mcp__mem0__*` namespace).
+   Setup prints the exact command with your URL filled in:
    ```
-   claude mcp add --transport http --scope user mem0 http://127.0.0.1:8788/mcp
+   claude mcp add --transport http --scope user mem0 <MEM0_BRADY_MCP_URL>
    ```
    `--scope user` is required so mem0 loads in **every** project, not just the directory you
    ran the command from (without it, `claude mcp add` defaults to `local` scope). Then
@@ -196,14 +244,20 @@ Verify any time with:
 
 Run `/mem0-brady:doctor` first — it pinpoints which layer is broken and prints the fix.
 
-- **Qdrant not reachable on `:6433`** — check `~/.local/share/mem0-brady/qdrant.log`, then
-  re-run `/mem0-brady:setup`.
-- **MCP server not reachable on `:8788`** — check `~/.local/share/mem0-brady/server.log`, then
+- **Qdrant not reachable** — managed only: check `~/.local/share/mem0-brady/qdrant.log`, then
+  re-run `/mem0-brady:setup`. An external install never contacts Qdrant from the host, so this
+  cannot be your problem there; check the MCP server instead.
+- **MCP server not reachable** — managed: check `~/.local/share/mem0-brady/server.log`, then
   re-run `/mem0-brady:setup`. (The server connects to Qdrant lazily on the first tool call, so
-  Qdrant must be up first — setup orders them correctly.)
-- **`mcp__mem0__*` tools missing** — confirm the user-level registration exists
-  (`claude mcp list` should show `mem0 → http://127.0.0.1:8788/mcp`) and that you restarted the
-  Claude session after setup.
+  Qdrant must be up first — setup orders them correctly.) External: start your own server.
+- **Recall is silently empty but doctor is green** — check that `MEM0_COLLECTION` and
+  `MEM0_USER_ID` name the store your memories are actually in; `/mem0-brady:migrate inspect`
+  lists the namespaces and domains present in a collection.
+- **`mcp__mem0__*` tools missing** — confirm the user-level registration exists (`claude mcp
+  list` should show `mem0 →` your MCP URL) and that you restarted the Claude session after
+  setup. Note the hooks match the `mcp__mem0__.*` prefix exactly: a server registered under
+  another name (or reached as a remote connector, which namespaces differently) will work as
+  a tool but the `app_id` write guard and the digest's op log won't fire for it.
 - **Hooks not recalling/capturing** — hooks fail open (a missing key/install/store just skips
   recall/capture, never breaks a session). Confirm `~/.config/mem0-brady/.env` has your key
   via `/mem0-brady:doctor`.
@@ -216,14 +270,14 @@ Run `/mem0-brady:doctor` first — it pinpoints which layer is broken and prints
 
 ## What setup installs
 
-| Path | What |
-|------|------|
-| `~/.local/bin/mem0-mcp-selfhosted` (+ `mem0-hook-*`) | uv-tool console scripts (the patched fork) |
-| `~/.local/share/mem0-brady/bin/qdrant` | native Qdrant server binary (no Docker) |
-| `~/.config/mem0-brady/.env` | config: key, models, MCP port, Qdrant URL, `shared-bch` (chmod 600) |
-| `~/.local/share/mem0-brady/qdrant-storage` | Qdrant's on-disk data |
-| `~/Library/LaunchAgents/com.mem0brady.qdrant.plist` | launchd agent running Qdrant (`:6433`) |
-| `~/Library/LaunchAgents/com.mem0brady.server.plist` | launchd agent running the MCP server (`:8788`) |
+| Path | What | Stack |
+|------|------|-------|
+| `~/.local/bin/mem0-mcp-selfhosted` (+ `mem0-hook-*`) | uv-tool console scripts (the patched fork) | both |
+| `~/.config/mem0-brady/.env` | config: key, models, stack, collection, `user_id`, URLs, ports (chmod 600) | both |
+| `~/.local/share/mem0-brady/bin/qdrant` | native Qdrant server binary (no Docker) | managed |
+| `~/.local/share/mem0-brady/qdrant-storage` | Qdrant's on-disk data | managed |
+| `~/Library/LaunchAgents/com.mem0brady.qdrant.plist` | launchd agent running Qdrant | managed |
+| `~/Library/LaunchAgents/com.mem0brady.server.plist` | launchd agent running the MCP server | managed |
 
 Setup boots out any stale `com.mem0team.*` agents from the plugin's former name (`mem0-team`).
 

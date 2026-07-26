@@ -1,0 +1,51 @@
+# The external stack: Qdrant + the mem0 MCP server, in Docker.
+#
+# Lives here, beside the vendored fork it builds from, so the server image and
+# the plugin's recall/capture hooks are the SAME code by construction. When this
+# was a loose directory outside any repo, the image built from git while the
+# hooks ran the vendored source — nothing forced them to agree.
+#
+# Copy .env.example to .env and fill it in, then:
+#   docker compose --env-file .env up -d --build
+#
+# The compose project name defaults to mem0-host for continuity with the
+# pre-vendoring deployment. Changing it does NOT move data (the volume is a bind
+# mount), but it DOES create a second set of containers alongside the old ones —
+# remove the originals first if you rename.
+name: ${MEM0_BRADY_COMPOSE_PROJECT:-mem0-host}
+
+services:
+  # Vector store — the actual shared memory.
+  #
+  # `expose` is what mem0-mcp uses over the compose network. The published host
+  # port is separate and NOT optional if you run the mem0-brady plugin's hooks:
+  # they instantiate mem0 directly in a host process rather than calling the MCP
+  # server, so a container-network-only Qdrant is invisible to them and recall
+  # silently returns nothing. Loopback-only, so nothing on the LAN can reach it.
+  qdrant:
+    image: qdrant/qdrant:latest
+    restart: unless-stopped
+    volumes:
+      # Absolute path, set in .env — deliberately not a relative path, so the
+      # data does not move just because this file did.
+      - ${MEM0_BRADY_QDRANT_STORAGE:?set MEM0_BRADY_QDRANT_STORAGE in stack/.env}:/qdrant/storage
+    expose:
+      - "6333"
+    ports:
+      - "127.0.0.1:${MEM0_BRADY_QDRANT_HOST_PORT:-6333}:6333"
+
+  # The MCP server (streamable-http). Built from ../server, the vendored fork.
+  # Host port is bound to 127.0.0.1 ONLY: cloudflared (running on the host) can
+  # reach it; nothing on the LAN can.
+  mem0-mcp:
+    build:
+      # Context is the plugin root so the Dockerfile can COPY the vendored
+      # server/ tree. Dockerfile path is relative to that context.
+      context: ..
+      dockerfile: stack/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      - qdrant
+    ports:
+      - "127.0.0.1:${MEM0_BRADY_MCP_HOST_PORT:-8081}:8081"

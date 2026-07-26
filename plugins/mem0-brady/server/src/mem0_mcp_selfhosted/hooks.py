@@ -22,6 +22,11 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from mem0_mcp_selfhosted.handoff_prompt import (
+    build_handoff_prompt,
+    coerce_completion,
+)
+
 # Load .env early so _get_user_id() sees MEM0_USER_ID even when it's
 # called before _get_memory().  load_dotenv(override=False) is the
 # default — it never clobbers values already in os.environ.
@@ -39,8 +44,33 @@ logger = logging.getLogger(__name__)
 _memory = None
 
 _MAX_MEMORIES = 20
-_MIN_USER_LEN = 20
-_MIN_ASSISTANT_LEN = 50
+
+
+def _int_env(name: str, default: int) -> int:
+    """Read a non-negative int from the environment, falling back on garbage."""
+    try:
+        value = int(os.environ.get(name, "").strip() or default)
+    except ValueError:
+        return default
+    return value if value >= 0 else default
+
+
+# Capture thresholds. Tunable from the config so trimming a noisy store does not
+# mean editing the fork. The comparison is AND, so a turn is skipped only when
+# BOTH sides are small — these are floors for "did anything happen", not budgets.
+_MIN_USER_LEN = _int_env("MEM0_MIN_USER_LEN", 200)
+_MIN_ASSISTANT_LEN = _int_env("MEM0_MIN_ASSISTANT_LEN", 500)
+
+# Minimum seconds between two memory writes for the same cwd. The Stop hook
+# fires on EVERY assistant turn, so without this, capture volume scales with
+# turn count rather than with information: a two-minute exchange produced 19
+# extracted facts, mostly near-duplicates of each other, because consecutive
+# captures re-read an overlapping transcript window.
+#
+# This gates ONLY the memory write. The handoff file is still refreshed every
+# turn — it is a single overwritten file, costs nothing, and is what makes
+# resume work. 0 disables the debounce.
+_CAPTURE_MIN_INTERVAL = _int_env("MEM0_CAPTURE_MIN_INTERVAL", 900)
 _MAX_CONTENT_LEN = 4000
 _RECENT_WINDOW = 6  # last ~3 exchanges (user+assistant pairs)
 
@@ -119,6 +149,29 @@ def _get_memory():
 
     _memory = Memory.from_config(config_dict)
     return _memory
+
+
+def _get_client():
+    """Return the client to use for RECALL-only paths.
+
+    Prefers the MCP server when MEM0_MCP_URL is set. The server already holds
+    the Qdrant URL, collection, user_id and API key, and it is long-lived, so
+    recall neither duplicates that configuration on the host nor pays a cold
+    ``Memory.from_config()`` (spaCy + fastembed model load) in every one of
+    these short-lived hook processes.
+
+    Falls back to the in-process client when unset, so nothing changes for a
+    managed/local stack.
+
+    Serves every path — recall *and* capture. The shim covers ``search`` and
+    ``add``, and stands in for the raw ``mem.llm`` handoff synthesis via the
+    server's ``synthesize_handoff`` tool, so an external stack needs no LLM
+    provider, API key or mem0 install on the host at all.
+    """
+    from mem0_mcp_selfhosted.mcp_client import get_client
+
+    client = get_client()
+    return client if client is not None else _get_memory()
 
 
 def _output(data: dict) -> None:
@@ -211,7 +264,7 @@ def context_main() -> None:
         user_id = _get_user_id()
         recall_app_ids = _get_recall_app_ids()
 
-        mem = _get_memory()
+        mem = _get_client()
 
         # Multi-query, multi-app_id search merged/deduped by id. NOTE(fork):
         # mem0ai 2.x search(query, *, top_k, filters, ...) takes entity scopes
@@ -342,6 +395,37 @@ def _handoff_path_for(cwd: str, project_name: str) -> Path:
     digest = hashlib.sha1(key.encode("utf-8")).hexdigest()[:8]
     safe = re.sub(r"[^A-Za-z0-9_.-]+", "-", project_name).strip("-") or "project"
     return _handoff_dir() / f"{safe}-{digest}.md"
+
+
+def _last_capture_path(cwd: str, project_name: str) -> Path:
+    """Marker recording when this cwd last WROTE A MEMORY.
+
+    Separate from the handoff file, whose mtime tracks the last *handoff*
+    refresh — which now happens every turn even when no memory is written.
+    """
+    return _handoff_path_for(cwd, project_name).with_suffix(".last-capture")
+
+
+def _capture_is_debounced(cwd: str, project_name: str) -> bool:
+    """True when a memory was written for this cwd too recently to write again."""
+    if _CAPTURE_MIN_INTERVAL <= 0:
+        return False
+    marker = _last_capture_path(cwd, project_name)
+    try:
+        age = datetime.now(timezone.utc).timestamp() - marker.stat().st_mtime
+    except (OSError, ValueError):
+        return False  # no marker yet, or unreadable — capture
+    return age < _CAPTURE_MIN_INTERVAL
+
+
+def _mark_captured(cwd: str, project_name: str) -> None:
+    """Stamp the debounce marker. Best-effort: never break capture over it."""
+    try:
+        marker = _last_capture_path(cwd, project_name)
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.touch()
+    except OSError:
+        logger.debug("could not stamp capture marker", exc_info=True)
 
 
 def _git_status_block(cwd: str) -> str:
@@ -522,44 +606,34 @@ def _synthesize_handoff(
     # the index of sibling pieces) into the synthesis so this per-cwd recap is
     # situated within the larger, multi-session objective. Per-piece current
     # state stays in each piece's own handoff — referenced, never inlined here.
-    workstream_block = ""
-    workstream_hint = ""
+    workstream_overview = ""
     if workstream and workstream.get("slug"):
-        overview = _workstream_overview(workstream["slug"])
-        if overview:
-            workstream_block = (
-                f"## Active workstream '{workstream['slug']}' "
-                f"(overarching, multi-session context):\n{overview}\n\n"
-            )
-            workstream_hint = (
-                " This session is part of the workstream above — keep the Goal "
-                "consistent with its overarching objective, and do not restate "
-                "sibling pieces' state (that lives in their own handoffs)."
-            )
+        workstream_overview = _workstream_overview(workstream["slug"]) or ""
 
-    prompt = (
-        "You are writing a terse resume handoff so a future agent (or the same "
-        "user returning to a cold context) can pick up a coding session "
-        "immediately. Be concrete: name files, PR numbers, identifiers.\n\n"
-        f"{workstream_block}"
-        f"## Previous handoff (the recap you are updating):\n{previous_block}\n\n"
-        f"## Recent conversation (oldest first), project '{project_name}':\n"
-        f"{convo}\n\n"
-        f"## Relevant long-term memory:\n{recalled_block}\n\n"
-        "Treat the previous handoff as prior state: carry forward goals and "
-        "watch-outs that still hold, update State/Next from the recent "
-        "conversation, and drop anything now done. Do not copy it verbatim."
-        f"{workstream_hint}\n\n"
-        "Write markdown under ~180 words, omitting any section that does not "
-        "apply, with these headers:\n"
-        "- **Goal** — the overarching objective in one sentence.\n"
-        "- **State** — what is done/shipped so far (bullets).\n"
-        "- **Next** — the immediate next step(s).\n"
-        "- **Watch out** — gotchas, blockers, or pending user decisions.\n"
-        "Start directly with the **Goal** line — no document title, no "
-        "preamble, no closing remarks."
+    # Both execution paths share one prompt template (handoff_prompt), so a
+    # recap cannot change character depending on which one ran.
+    ws_slug = workstream.get("slug") if workstream else ""
+
+    synth = getattr(mem, "synthesize_handoff", None)
+    if synth is not None:
+        # Server-side: the host has no LLM provider or API key of its own.
+        return synth(
+            conversation=convo,
+            project_name=project_name,
+            previous_handoff=previous_block,
+            recalled=recalled_block,
+            workstream_overview=workstream_overview,
+            workstream_slug=ws_slug or "",
+        )
+
+    prompt = build_handoff_prompt(
+        conversation=convo,
+        project_name=project_name,
+        previous_handoff=previous_block,
+        recalled=recalled_block,
+        workstream_overview=workstream_overview,
+        workstream_slug=ws_slug or "",
     )
-
     try:
         resp = mem.llm.generate_response(
             messages=[{"role": "user", "content": prompt}]
@@ -567,12 +641,7 @@ def _synthesize_handoff(
     except Exception:
         logger.debug("handoff synthesis failed", exc_info=True)
         return ""
-
-    # generate_response returns a str on the no-tools path across providers,
-    # but be defensive about a dict-shaped return.
-    if isinstance(resp, dict):
-        resp = resp.get("content") or resp.get("text") or ""
-    return (resp or "").strip()
+    return coerce_completion(resp)
 
 
 def _write_handoff(
@@ -668,8 +737,14 @@ def _capture_summary(
         f"Session summary for project '{project_name}':\n\n"
         + "\n\n".join(exchanges)
         + "\n\n"
-        "Extract key decisions, solutions found, patterns discovered, "
-        "configuration changes, and important context for future sessions."
+        "Extract only DURABLE facts a future session would need and could not "
+        "rediscover cheaply: configuration values, endpoints, versions, ids, "
+        "architectural decisions and the reasoning behind them, and gotchas "
+        "that cost time. Prefer few, dense, self-contained facts.\n"
+        "Do NOT extract narration about this conversation — no 'the user asked/"
+        "confirmed/was told', no progress reports, no restating what was just "
+        "done unless the outcome itself is a durable fact. If nothing meets "
+        "that bar, extract nothing."
     )
 
     metadata: dict = {"source": source, "session_id": session_id}
@@ -688,13 +763,20 @@ def _capture_summary(
     if workstream:
         metadata["workstream_id"] = workstream["slug"]
 
-    mem = _get_memory()
-    mem.add(
-        messages=[{"role": "user", "content": summary}],
-        user_id=_get_user_id(),
-        infer=True,
-        metadata=metadata,
-    )
+    mem = _get_client()
+    # Debounced: the handoff below still refreshes every turn, but the memory
+    # write is rate-limited per cwd so a long session does not bury the store
+    # in near-duplicate extractions of an overlapping transcript window.
+    if _capture_is_debounced(cwd, project_name):
+        logger.debug("capture debounced for %s", cwd)
+    else:
+        mem.add(
+            messages=[{"role": "user", "content": summary}],
+            user_id=_get_user_id(),
+            infer=True,
+            metadata=metadata,
+        )
+        _mark_captured(cwd, project_name)
 
     # Resume-recap handoff (reuses the messages already read + the same mem
     # instance). Fail-open inside _write_handoff.
@@ -803,7 +885,7 @@ def prompt_main() -> None:
 
         # Resume-intent → actually pre-search mem0 and inject.
         if _RESUME_RE.search(prompt):
-            mem = _get_memory()
+            mem = _get_client()
             mems = _search_scoped(
                 mem,
                 queries=[
@@ -887,7 +969,7 @@ def file_context_main() -> None:
         basename = p.name
         query = f"{rel} {basename}" if rel != basename else rel
 
-        mem = _get_memory()
+        mem = _get_client()
         mems = _search_scoped(
             mem,
             queries=[query],

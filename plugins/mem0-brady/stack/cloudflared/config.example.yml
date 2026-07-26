@@ -1,0 +1,25 @@
+# Named Cloudflare Tunnel config, exposing the stack to Claude cloud
+# containers/routines. Requires a domain managed by Cloudflare.
+#
+# Copy to config.yml, then fill in the tunnel id and hostname:
+#   cloudflared tunnel create mem0            # prints <TUNNEL_ID>, writes creds json
+#   cloudflared tunnel route dns mem0 mem.example.com
+#   cloudflared tunnel --config <this file> run mem0
+#
+# The credentials JSON parses as YAML (YAML is a superset of JSON), so
+# `--config <creds>.json` also works when ingress is managed in the dashboard
+# instead of here.
+tunnel: mem0
+credentials-file: /Users/you/.cloudflared/<TUNNEL_ID>.json
+
+ingress:
+  - hostname: mem.example.com
+    service: http://localhost:8081
+    originRequest:
+      # The MCP SDK (>=1.23.0) turns on DNS-rebinding protection, which rejects
+      # requests whose Host header isn't an expected local host. The tunnel would
+      # otherwise forward Host: mem.example.com and get blocked. Pin the origin
+      # Host to what the server expects so it passes.
+      httpHostHeader: localhost:8081
+  # Everything else 404s.
+  - service: http_status:404

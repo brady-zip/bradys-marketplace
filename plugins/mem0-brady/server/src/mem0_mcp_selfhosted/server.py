@@ -21,6 +21,10 @@ from pydantic import Field
 from mem0_mcp_selfhosted.config import ProviderInfo, build_config
 from mem0_mcp_selfhosted.env import bool_env, env
 from mem0_mcp_selfhosted.graph_tools import get_entity, search_graph
+from mem0_mcp_selfhosted.handoff_prompt import (
+    build_handoff_prompt,
+    coerce_completion,
+)
 from mem0_mcp_selfhosted.helpers import (
     _mem0_call,
     call_with_graph,
@@ -592,6 +596,72 @@ def _register_tools(mcp: FastMCP) -> None:
             }
 
         return _mem0_call(_do_delete_entity)
+
+    # ============================================================
+    # Handoff synthesis
+    # ============================================================
+
+    @mcp.tool()
+    def synthesize_handoff(
+        conversation: Annotated[
+            str,
+            Field(
+                description="Pre-formatted recent transcript, oldest first, as "
+                "'[User]: ...' / '[Assistant]: ...' blocks."
+            ),
+        ],
+        project_name: Annotated[
+            str, Field(description="Project the session belongs to.")
+        ],
+        previous_handoff: Annotated[
+            str | None,
+            Field(description="The recap being updated, so the new one continues it."),
+        ] = None,
+        recalled: Annotated[
+            str | None,
+            Field(description="Newline-bulleted long-term memories for context."),
+        ] = None,
+        workstream_overview: Annotated[
+            str | None,
+            Field(description="Active workstream overview (goal + sibling pieces)."),
+        ] = None,
+        workstream_slug: Annotated[
+            str | None, Field(description="Active workstream slug.")
+        ] = None,
+    ) -> str:
+        """Write a resume handoff recap from a session's recent transcript.
+
+        Exists so a client can produce a handoff without running an LLM itself:
+        the capture hooks gather host-side inputs (transcript, previous handoff
+        file, workstream doc) and this turns them into the recap using the
+        server's already-configured chat model.
+
+        Deliberately NOT a general completion endpoint. This server is commonly
+        published through a tunnel, where an "arbitrary prompt in, text out"
+        tool would be an open LLM proxy for anyone past the access layer. The
+        prompt is built here from structured fields instead, so the callable
+        surface stays one fixed task.
+        """
+        prompt = build_handoff_prompt(
+            conversation=conversation,
+            project_name=project_name,
+            previous_handoff=previous_handoff or "",
+            recalled=recalled or "",
+            workstream_overview=workstream_overview or "",
+            workstream_slug=workstream_slug or "",
+        )
+        mem = _ensure_memory()
+
+        def _do_synthesis():
+            return coerce_completion(
+                mem.llm.generate_response(
+                    messages=[{"role": "user", "content": prompt}]
+                )
+            )
+
+        # _mem0_call json.dumps() the result, matching every other tool here, so
+        # the client decodes one shape regardless of which tool it called.
+        return _mem0_call(_do_synthesis)
 
     # ============================================================
     # Direct Neo4j Graph Tools
