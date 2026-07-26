@@ -113,12 +113,31 @@ pass "stack: ${STACK}"
 pass "mcp:    ${MCP_URL}"
 if [ "$MCP_MODE" = "1" ]; then
   pass "store identity, embeddings and API key: owned by the server"
-  # A host-side MEM0_USER_ID under an external stack is a SECOND copy of
-  # something the server already owns, and the failure mode is silent: hooks and
-  # guards would enforce the host's copy while writes land under the server's.
-  if [ -n "$USER_ID" ]; then
-    fail_optional "host pins MEM0_USER_ID=${USER_ID}, but the server owns the namespace here" \
-      "Remove MEM0_USER_ID from ${ENV_FILE} unless it provably matches the server, or it will be enforced against writes that land elsewhere."
+  # "Owned by the server" is true but useless on its own — it names nothing you
+  # can check against. Ask the server what it actually holds, so this reports
+  # the real namespace rather than an assurance that one exists somewhere.
+  # shellcheck source=lib-mcp.sh
+  . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib-mcp.sh"
+  if mcp_init "$MCP_URL"; then
+    SERVER_ENT="$(mcp_call list_entities '{}' || true)"
+    if [ -n "$SERVER_ENT" ]; then
+      SERVER_USERS="$(printf '%s' "$SERVER_ENT" | jq -r '[.users[]? | "\(.value) (\(.count))"] | join(", ")' 2>/dev/null)"
+      SERVER_AGENTS="$(printf '%s' "$SERVER_ENT" | jq -r '[.agents[]? | "\(.value) (\(.count))"] | join(", ")' 2>/dev/null)"
+      [ -n "$SERVER_USERS" ] && pass "server user_id: ${SERVER_USERS}" \
+        || fail_optional "server holds no memories under any user_id" "Expected on a brand-new store; otherwise check you are pointed at the right server."
+      [ -n "$SERVER_AGENTS" ] && pass "server agent_id: ${SERVER_AGENTS}"
+      # The host guessing a namespace the server disagrees with is the exact
+      # failure this pairing exists to catch: hooks and the write guard enforce
+      # the host's copy while writes land under the server's.
+      if [ -n "$USER_ID" ] && ! printf '%s' "$SERVER_ENT" | jq -e --arg u "$USER_ID" '[.users[]?.value] | index($u)' >/dev/null 2>&1; then
+        fail_required "host pins MEM0_USER_ID=${USER_ID}, which the server does not hold" \
+          "Remove MEM0_USER_ID from ${ENV_FILE} — under an external stack the server owns the namespace, and a host copy that disagrees is enforced against writes that land elsewhere."
+      elif [ -n "$USER_ID" ]; then
+        pass "host MEM0_USER_ID=${USER_ID} matches the server"
+      fi
+    fi
+  else
+    fail_optional "could not read store identity from ${MCP_URL}" "Start the external stack; identity is unverified until then."
   fi
 else
   pass "collection: ${COLLECTION}"
@@ -264,15 +283,30 @@ else
     # shellcheck disable=SC1090
     . "$SCOPE_LIB" 2>/dev/null
     mem0_scope_init "$PWD" 2>/dev/null
-    printf '%s|%s|%s|%s' "${MEM0_APP_ID:-}" "${MEM0_RECALL_APP_IDS:-}" \
-      "${MEM0_AGENT_ID:-}" "${MEM0_SCOPE_WHY_APP_ID:-}"
+    printf '%s|%s|%s|%s|%s|%s' "${MEM0_APP_ID:-}" "${MEM0_RECALL_APP_IDS:-}" \
+      "${MEM0_AGENT_ID:-}" "${MEM0_SCOPE_WHY_APP_ID:-}" \
+      "${MEM0_SCOPE_WHY_AGENT_ID:-}" "${MEM0_SCOPE_REPO_FILE:-}"
   )"
-  S_APP="${SCOPE_OUT%%|*}"; REST="${SCOPE_OUT#*|}"
-  S_RECALL="${REST%%|*}";   REST="${REST#*|}"
-  S_AGENT="${REST%%|*}";    S_WHY="${REST#*|}"
+  S_APP="${SCOPE_OUT%%|*}";    REST="${SCOPE_OUT#*|}"
+  S_RECALL="${REST%%|*}";      REST="${REST#*|}"
+  S_AGENT="${REST%%|*}";       REST="${REST#*|}"
+  S_WHY="${REST%%|*}";         REST="${REST#*|}"
+  S_WHY_AGENT="${REST%%|*}";   S_REPO="${REST#*|}"
   if [ -n "$S_APP" ]; then
-    pass "cwd resolves to app_id=${S_APP} agent_id=${S_AGENT} (${S_WHY})"
-    [ "$S_RECALL" = "$S_APP" ] || pass "recall widened to: ${S_RECALL}"
+    pass "app_id=${S_APP}   (${S_WHY})"
+    pass "agent_id=${S_AGENT}   (${S_WHY_AGENT})"
+    if [ "$S_RECALL" = "$S_APP" ]; then
+      pass "recall: ${S_RECALL} (same as writes)"
+    else
+      pass "recall widened to: ${S_RECALL}"
+    fi
+    # Naming the file matters: a scope coming from a checked-in repo override is
+    # the case most likely to surprise someone reading only the machine config.
+    if [ -n "$S_REPO" ]; then
+      pass "repo override in effect: ${S_REPO}"
+    else
+      pass "no repo override (no .mem0-brady.json at or above ${PWD})"
+    fi
   else
     fail_optional "scope resolution produced no app_id for ${PWD}" "Run /mem0-brady:scopes to see which layer failed."
   fi
