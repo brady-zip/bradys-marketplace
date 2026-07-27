@@ -16,6 +16,28 @@
 
 MEM0_MCP_SESSION=""
 
+# Extra request headers, read from the same MEM0_MCP_HEADERS the Python client
+# reads (mcp_client.py). One variable on purpose: two names for one credential
+# is how one of them ends up unset, and the symptom — doctor reporting a store
+# it cannot reach while the hooks reach it fine, or the reverse — reads as a
+# server problem rather than a config one.
+#
+# Held as an array of ready-made curl arguments so a header value containing
+# spaces survives; expanded with the ${a[@]+"${a[@]}"} idiom because an empty
+# array under `set -u` is an unbound-variable error in bash before 4.4, and
+# macOS still ships 3.2.
+MEM0_MCP_HEADER_ARGS=()
+
+_mcp_load_header_args() {
+  MEM0_MCP_HEADER_ARGS=()
+  [ -n "${MEM0_MCP_HEADERS:-}" ] || return 0
+  local line
+  while IFS= read -r line; do
+    [ -n "$line" ] && MEM0_MCP_HEADER_ARGS+=("$line")
+  done < <(printf '%s' "$MEM0_MCP_HEADERS" |
+    jq -r 'to_entries[] | "-H", "\(.key): \(.value)"' 2>/dev/null)
+}
+
 # mcp_init <url>
 # Handshake and stash the session id. Returns non-zero if the server is
 # unreachable, is not an MCP endpoint, or curl/jq are missing.
@@ -24,9 +46,11 @@ mcp_init() {
   [ -n "$url" ] || return 1
   command -v curl >/dev/null 2>&1 && command -v jq >/dev/null 2>&1 || return 1
   MEM0_MCP_URL_RESOLVED="$url"
+  _mcp_load_header_args
   MEM0_MCP_SESSION="$(curl -s -D- -o /dev/null --max-time 5 -X POST "$url" \
     -H 'Content-Type: application/json' \
     -H 'Accept: application/json, text/event-stream' \
+    ${MEM0_MCP_HEADER_ARGS[@]+"${MEM0_MCP_HEADER_ARGS[@]}"} \
     -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"mem0-brady","version":"1"}}}' \
     2>/dev/null | tr -d '\r' | awk -F': ' 'tolower($1)=="mcp-session-id"{print $2}')"
   [ -n "$MEM0_MCP_SESSION" ] || return 1
@@ -34,6 +58,7 @@ mcp_init() {
     -H 'Content-Type: application/json' \
     -H 'Accept: application/json, text/event-stream' \
     -H "mcp-session-id: $MEM0_MCP_SESSION" \
+    ${MEM0_MCP_HEADER_ARGS[@]+"${MEM0_MCP_HEADER_ARGS[@]}"} \
     -d '{"jsonrpc":"2.0","method":"notifications/initialized"}' >/dev/null 2>&1
   return 0
 }
@@ -47,6 +72,7 @@ mcp_call() {
     -H 'Content-Type: application/json' \
     -H 'Accept: application/json, text/event-stream' \
     -H "mcp-session-id: $MEM0_MCP_SESSION" \
+    ${MEM0_MCP_HEADER_ARGS[@]+"${MEM0_MCP_HEADER_ARGS[@]}"} \
     -d "$(jq -nc --arg n "$1" --argjson a "${2:-\{\}}" \
         '{jsonrpc:"2.0",id:2,method:"tools/call",params:{name:$n,arguments:$a}}')" \
     2>/dev/null | sed -n 's/^data: //p' | jq -r '.result.content[0].text // empty' 2>/dev/null)"
