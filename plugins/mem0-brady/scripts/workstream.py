@@ -11,7 +11,15 @@ overarching goal. This script maintains, per workstream ``<slug>``:
 
     holding the Goal + a **Pieces** index (one entry per contributing worktree,
     each *referencing* that worktree's per-cwd handoff for its current state —
-    referenced, never inlined) + a hand-maintained References section.
+    referenced, never inlined) + a **Narrative** pointer + a hand-maintained
+    References section.
+
+    The doc holds what must be enumerated exactly — goal, config, artifact
+    pointers, the piece index. It deliberately does NOT hold narrative history:
+    while a session is tagged, capture stamps ``run_id=<slug>``, making the
+    thread's history a real mem0 scope that is searched by relevance rather
+    than read whole. That is what keeps a long-lived doc a fixed size instead
+    of growing past the point anyone rereads it.
 
   * an **active pointer** keyed by ``session_id`` (so the tag is strictly
     per-session)::
@@ -43,10 +51,44 @@ _PIECES_COMMENT = (
     "<!-- current state of each piece lives in its referenced handoff — "
     "read on demand; NOT auto-injected -->"
 )
+# The doc holds what must be ENUMERATED EXACTLY; mem0 holds what is better
+# RANKED. Keeping narrative out of References is what stops a long-lived
+# workstream doc from growing into something too big to read — which is the
+# failure mode it had, since every session appended and none ever pruned.
 _REFERENCES_COMMENT = (
-    "<!-- free-form, hand-maintained: PRs, commits, issues, links -->"
+    "<!-- free-form, hand-maintained: PRs, commits, issues, links. "
+    "Pointers and config only — narrative history belongs in mem0 under "
+    "run_id, where it comes back ranked instead of read whole. -->"
+)
+_NARRATIVE_COMMENT = (
+    "<!-- managed: how to pull this workstream's history back, ranked -->"
 )
 _GOAL_PLACEHOLDER = "<describe the overarching objective in 1–3 sentences>"
+
+
+def _narrative_body(slug: str) -> list[str]:
+    """The Narrative section: a query, not a transcript.
+
+    While a session is tagged with this workstream, capture stamps run_id=<slug>
+    on the memory it writes. That makes the thread's history a real mem0 scope —
+    searchable by relevance, filterable, and retirable in one call — so this
+    section stays a fixed three lines no matter how long the workstream runs,
+    instead of accumulating prose nobody rereads.
+    """
+    return [
+        _NARRATIVE_COMMENT,
+        "",
+        f"Session history for this workstream is captured in mem0 under "
+        f"`run_id={slug}`. Pull the relevant parts rather than reading it all:",
+        "",
+        f'- `mcp__mem0__search_memories(query="<what you need>", run_id="{slug}")` '
+        f"— ranked by relevance to the question at hand",
+        f'- `mcp__mem0__get_memories(run_id="{slug}")` — everything, newest first',
+        "",
+        "Per-piece *current* state is in each piece's handoff, above. This is the "
+        "cross-session narrative: what was tried, what was decided, what broke.",
+        "",
+    ]
 _PRUNE_DAYS = 30
 
 
@@ -172,6 +214,24 @@ def _get(sections: list[list], name: str) -> list[str] | None:
     return None
 
 
+def _set_before(sections: list[list], name: str, body: list[str], anchor: str) -> None:
+    """Set *name*, inserting before *anchor* when it has to be created.
+
+    Same as ``_set`` for a section that already exists; the difference is only
+    where a NEW one lands, so a doc that predates a section ends up with the
+    same layout as one created fresh.
+    """
+    for entry in sections:
+        if entry[0] == name:
+            entry[1] = body
+            return
+    for i, entry in enumerate(sections):
+        if entry[0] == anchor:
+            sections.insert(i, [name, body])
+            return
+    sections.append([name, body])
+
+
 def _set(sections: list[list], name: str, body: list[str]) -> None:
     for entry in sections:
         if entry[0] == name:
@@ -200,6 +260,7 @@ def _new_doc(slug: str, goal: str, ts: str) -> str:
     sections: list[list] = [
         ["Goal", ["", goal or _GOAL_PLACEHOLDER, ""]],
         ["Pieces", [_PIECES_COMMENT, ""]],
+        ["Narrative", _narrative_body(slug)],
         ["References", [_REFERENCES_COMMENT, ""]],
     ]
     return _join(head, sections)
@@ -241,6 +302,14 @@ def cmd_activate(rest: list[str]) -> int:
                 _set(sections, "Goal", ["", goal, ""])
         if _get(sections, "Pieces") is None:
             _set(sections, "Pieces", [_PIECES_COMMENT, ""])
+        # Backfilled on activation so docs created before run_id scoping pick it
+        # up. Rewritten every time rather than only when absent: it is a fixed
+        # pointer derived from the slug, not user content, so there is nothing
+        # to preserve and drift would just leave a stale query in the doc.
+        # Placed before References to match a freshly-created doc — a plain
+        # append would land it after the hand-maintained section, so the two
+        # would read differently depending on when the workstream was started.
+        _set_before(sections, "Narrative", _narrative_body(slug), "References")
         if _get(sections, "References") is None:
             _set(sections, "References", [_REFERENCES_COMMENT, ""])
 
@@ -377,6 +446,12 @@ def _print_overview(doc: Path) -> None:
             print(f"  {ln}")
     else:
         print("  (none registered yet)")
+    # Printed rather than left to the doc so the query is in front of you at the
+    # moment you are deciding what to catch up on.
+    slug = doc.stem
+    print()
+    print("Narrative (cross-session history — search it, don't read it all):")
+    print(f'  mcp__mem0__search_memories(query="<what you need>", run_id="{slug}")')
 
 
 def _prune(days: int = _PRUNE_DAYS) -> None:

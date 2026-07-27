@@ -57,7 +57,12 @@ QDRANT_URL="${QDRANT_URL:-http://127.0.0.1:6433}"
 MCP_URL="${MEM0_BRADY_MCP_URL:-$(env_get MEM0_BRADY_MCP_URL)}"
 MCP_URL="${MCP_URL:-http://127.0.0.1:8788/mcp}"
 COLLECTION="$(env_get MEM0_COLLECTION)"; COLLECTION="${COLLECTION:-mem0_brady}"
-USER_ID="$(env_get MEM0_USER_ID)"; USER_ID="${USER_ID:-shared-bch}"
+# Deliberately NOT defaulted. Under an external stack the server owns the
+# namespace and this host legitimately has no MEM0_USER_ID, so a default here
+# would be a guess reported as fact — and this script's whole premise is that it
+# checks a machine against ITS values. Empty means "unknown", and the Stack
+# section says so rather than naming a store that may not exist.
+USER_ID="$(env_get MEM0_USER_ID)"
 # An external stack drives mem0 through the server, so this host holds no key,
 # no store identity and no mem0 install. Checking for them would report a
 # healthy install as broken.
@@ -108,8 +113,39 @@ pass "stack: ${STACK}"
 pass "mcp:    ${MCP_URL}"
 if [ "$MCP_MODE" = "1" ]; then
   pass "store identity, embeddings and API key: owned by the server"
+  # "Owned by the server" is true but useless on its own — it names nothing you
+  # can check against. Ask the server what it actually holds, so this reports
+  # the real namespace rather than an assurance that one exists somewhere.
+  # shellcheck source=lib-mcp.sh
+  . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib-mcp.sh"
+  if mcp_init "$MCP_URL"; then
+    SERVER_ENT="$(mcp_call list_entities '{}' || true)"
+    if [ -n "$SERVER_ENT" ]; then
+      SERVER_USERS="$(printf '%s' "$SERVER_ENT" | jq -r '[.users[]? | "\(.value) (\(.count))"] | join(", ")' 2>/dev/null)"
+      SERVER_AGENTS="$(printf '%s' "$SERVER_ENT" | jq -r '[.agents[]? | "\(.value) (\(.count))"] | join(", ")' 2>/dev/null)"
+      [ -n "$SERVER_USERS" ] && pass "server user_id: ${SERVER_USERS}" \
+        || fail_optional "server holds no memories under any user_id" "Expected on a brand-new store; otherwise check you are pointed at the right server."
+      [ -n "$SERVER_AGENTS" ] && pass "server agent_id: ${SERVER_AGENTS}"
+      # The host guessing a namespace the server disagrees with is the exact
+      # failure this pairing exists to catch: hooks and the write guard enforce
+      # the host's copy while writes land under the server's.
+      if [ -n "$USER_ID" ] && ! printf '%s' "$SERVER_ENT" | jq -e --arg u "$USER_ID" '[.users[]?.value] | index($u)' >/dev/null 2>&1; then
+        fail_required "host pins MEM0_USER_ID=${USER_ID}, which the server does not hold" \
+          "Remove MEM0_USER_ID from ${ENV_FILE} — under an external stack the server owns the namespace, and a host copy that disagrees is enforced against writes that land elsewhere."
+      elif [ -n "$USER_ID" ]; then
+        pass "host MEM0_USER_ID=${USER_ID} matches the server"
+      fi
+    fi
+  else
+    fail_optional "could not read store identity from ${MCP_URL}" "Start the external stack; identity is unverified until then."
+  fi
 else
-  pass "collection: ${COLLECTION}   user_id: ${USER_ID}"
+  pass "collection: ${COLLECTION}"
+  if [ -n "$USER_ID" ]; then
+    pass "user_id: ${USER_ID}"
+  else
+    fail_required "no MEM0_USER_ID in ${ENV_FILE}" "A managed stack owns its own identity — run /mem0-brady:setup."
+  fi
   pass "qdrant: ${QDRANT_URL}"
 fi
 
@@ -231,6 +267,66 @@ else
     fail_optional "sentence-transformers not importable in the tool venv" "Re-run /mem0-brady:setup (reinstalls the fork with reranker deps)."
   fi
 fi
+fi
+
+# --- Scopes (optional) -------------------------------------------------------
+print_header "Scopes (optional)"
+# How this machine partitions the store. Reported for the CWD, since scope is a
+# property of where a session runs, not of the install. Full inventory (which
+# partitions actually hold memories) is /mem0-brady:scopes; this only checks
+# that resolution works and that the config is not silently mangled.
+SCOPE_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/../hooks" 2>/dev/null && pwd)/lib-scope.sh"
+if [ ! -f "$SCOPE_LIB" ]; then
+  fail_optional "scope resolver missing at ${SCOPE_LIB}" "Reinstall the plugin."
+else
+  SCOPE_OUT="$(
+    # shellcheck disable=SC1090
+    . "$SCOPE_LIB" 2>/dev/null
+    mem0_scope_init "$PWD" 2>/dev/null
+    printf '%s|%s|%s|%s|%s|%s' "${MEM0_APP_ID:-}" "${MEM0_RECALL_APP_IDS:-}" \
+      "${MEM0_AGENT_ID:-}" "${MEM0_SCOPE_WHY_APP_ID:-}" \
+      "${MEM0_SCOPE_WHY_AGENT_ID:-}" "${MEM0_SCOPE_REPO_FILE:-}"
+  )"
+  S_APP="${SCOPE_OUT%%|*}";    REST="${SCOPE_OUT#*|}"
+  S_RECALL="${REST%%|*}";      REST="${REST#*|}"
+  S_AGENT="${REST%%|*}";       REST="${REST#*|}"
+  S_WHY="${REST%%|*}";         REST="${REST#*|}"
+  S_WHY_AGENT="${REST%%|*}";   S_REPO="${REST#*|}"
+  if [ -n "$S_APP" ]; then
+    pass "app_id=${S_APP}   (${S_WHY})"
+    pass "agent_id=${S_AGENT}   (${S_WHY_AGENT})"
+    if [ "$S_RECALL" = "$S_APP" ]; then
+      pass "recall: ${S_RECALL} (same as writes)"
+    else
+      pass "recall widened to: ${S_RECALL}"
+    fi
+    # Naming the file matters: a scope coming from a checked-in repo override is
+    # the case most likely to surprise someone reading only the machine config.
+    if [ -n "$S_REPO" ]; then
+      pass "repo override in effect: ${S_REPO}"
+    else
+      pass "no repo override (no .mem0-brady.json at or above ${PWD})"
+    fi
+  else
+    fail_optional "scope resolution produced no app_id for ${PWD}" "Run /mem0-brady:scopes to see which layer failed."
+  fi
+
+  # The rules value is globs joined by ';' in a file that gets `source`d, so an
+  # unquoted value does not merely misparse — the ';' ends the assignment and
+  # the shell tries to RUN the remainder. Symptom is a rule that never matches,
+  # which looks identical to a rule that does not apply.
+  RAW_RULES="$(grep -E '^MEM0_SCOPE_RULES=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)"
+  if [ -n "$RAW_RULES" ]; then
+    case "$RAW_RULES" in
+      \'*\'|\"*\") pass "MEM0_SCOPE_RULES is quoted" ;;
+      *\;*|*\**)
+        fail_optional "MEM0_SCOPE_RULES is unquoted in ${ENV_FILE}" \
+          "Wrap the value in single quotes — this file is sourced, so an unquoted ';' ends the assignment and an unquoted '*' globs against the cwd." ;;
+      *) pass "MEM0_SCOPE_RULES set" ;;
+    esac
+  else
+    pass "no MEM0_SCOPE_RULES — every path resolves to the default partition"
+  fi
 fi
 
 # --- Workstreams (optional) --------------------------------------------------

@@ -512,6 +512,80 @@ else
   fi
 fi
 
+# --- Memory scopes -----------------------------------------------------------
+step "Memory scopes"
+# Runs LAST, after the server is up, for one reason: it shows which partitions
+# already hold memories before asking you to name one. Choosing a partition
+# blind is how you end up one character off an existing name — nothing errors,
+# the write starts a fresh partition, and every memory in the old one silently
+# stops reaching recall.
+#
+# Writes real (uncommented) keys rather than relying on the template merge: the
+# template documents these keys in comments, and the merge loop skips comment
+# lines, so an existing install would otherwise never receive them.
+# shellcheck source=lib-mcp.sh
+. "${SCRIPT_DIR}/lib-mcp.sh"
+
+say "app_id partitions work; agent_id is who writes them; run_id is the active workstream."
+if mcp_init "$MCP_URL"; then
+  COUNTS="$(mcp_app_id_counts)"
+  if [ -n "$COUNTS" ]; then
+    say "partitions already in this store:"
+    printf '%s\n' "$COUNTS" | while read -r n a; do printf "    %-24s %s memories\n" "$a" "$n"; done
+    say "reuse a name above to ATTACH to existing memories; a new name starts an empty partition"
+  else
+    say "this store holds no memories yet — any partition name starts fresh"
+  fi
+else
+  warn "could not read the store (server unreachable) — naming a partition here is unverified"
+fi
+
+EXIST_RULES="$(env_get MEM0_SCOPE_RULES "$ENV_FILE")"
+EXIST_DEFAULT="$(env_get MEM0_SCOPE_DEFAULT_APP "$ENV_FILE")"
+EXIST_AGENT="$(env_get MEM0_SCOPE_AGENT_ID "$ENV_FILE")"
+
+SCOPE_DEFAULT_APP="$(ask "default app_id for paths matching no rule" "${EXIST_DEFAULT:-general}")"
+SCOPE_AGENT="$(ask "agent_id for sessions on this machine" "${EXIST_AGENT:-claude}")"
+say "routing rules map a path glob to an app_id, e.g. 'evergreen:*evergreen*;hal-ops:*/hal/*'"
+say "leave blank to route everything to '${SCOPE_DEFAULT_APP}' (per-repo overrides still work)"
+SCOPE_RULES="$(ask "MEM0_SCOPE_RULES" "$(printf '%s' "${EXIST_RULES}" | tr -d "\"'")")"
+
+# Always single-quote the rules on write. The value is globs joined by ';' in a
+# file that gets sourced, so unquoted it does not merely misparse: the ';' ends
+# the assignment and the shell tries to run the remainder.
+set_env_key() {
+  local k="$1" v="$2" line tmp
+  line="${k}=${v}"
+  if grep -qE "^${k}=" "$ENV_FILE" 2>/dev/null; then
+    tmp="$(mktmp)"
+    K="$k" LINE="$line" awk '
+      $0 ~ "^" ENVIRON["K"] "=" && !done { print ENVIRON["LINE"]; done=1; next }
+      { print }' "$ENV_FILE" > "$tmp" && mv "$tmp" "$ENV_FILE"
+  else
+    printf '%s\n' "$line" >> "$ENV_FILE"
+  fi
+}
+set_env_key MEM0_SCOPE_DEFAULT_APP "$SCOPE_DEFAULT_APP"
+set_env_key MEM0_SCOPE_AGENT_ID "$SCOPE_AGENT"
+[ -n "$SCOPE_RULES" ] && set_env_key MEM0_SCOPE_RULES "'${SCOPE_RULES}'"
+chmod 600 "$ENV_FILE"
+say "scopes written to ${ENV_FILE}"
+
+# Per-repo override. Offered only when the cwd is a checkout that does not
+# already have one — a repo whose memories belong in their own partition says so
+# in its own tree, so the routing travels with a clone instead of living only in
+# one machine's config.
+REPO_ROOT="$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null || true)"
+if [ -n "$REPO_ROOT" ] && [ ! -f "${REPO_ROOT}/.mem0-brady.json" ]; then
+  REPO_APP="$(ask "app_id for the repo at ${REPO_ROOT} (blank to skip)" "")"
+  if [ -n "$REPO_APP" ]; then
+    printf '{\n  "app_id": "%s",\n  "recall_app_ids": ["%s", "%s"]\n}\n' \
+      "$REPO_APP" "$REPO_APP" "$SCOPE_DEFAULT_APP" > "${REPO_ROOT}/.mem0-brady.json"
+    say "wrote ${REPO_ROOT}/.mem0-brady.json (recall spans ${REPO_APP} + ${SCOPE_DEFAULT_APP})"
+  fi
+fi
+say "run /mem0-brady:scopes to see what any directory resolves to, and why"
+
 printf "\n${GREEN}${BOLD}mem0-brady is set up.${NC}\n"
 printf "  • Stack:         %s\n" "$STACK"
 printf "  • Config:        %s\n" "$ENV_FILE"

@@ -1,2 +1,3 @@
 # Holds OPENAI_API_KEY and machine-specific absolute paths. Never commit.
 .env
+cloudflared/config.yml

@@ -1,6 +1,31 @@
 # CHANGELOG
 
 
+## Unreleased
+
+### Features
+
+- **hooks**: capture writes `agent_id`, and the workstream becomes `run_id`
+
+`_get_agent_id()` reads `MEM0_AGENT_ID` (mirroring `_get_app_id`), so a capture records which
+  agent produced it and several agents can share a project without cross-pollinating what each
+  has learned. The active workstream now sets the real `run_id` scope instead of
+  `metadata["workstream_id"]` — an opaque payload field nothing could filter on, despite the
+  docs claiming recall and /digest used it. Both are passed as keyword arguments rather than
+  through metadata, because `Memory.add` takes them as named scope arguments and would
+  otherwise store them as inert payload. Unset means the scope is simply not written, so
+  untagged sessions are unchanged.
+
+### Bug Fixes
+
+- **mcp_client**: `add()` silently dropped `agent_id` and `run_id`
+
+`McpMemory.search` lifted all three entity scopes out of `filters`; `add` lifted only `app_id`,
+  so under an external stack the other two could be *filtered* on but never *written* —
+  anything passed landed in `**_ignored` and vanished. `add` now mirrors `search`, and accepts
+  the scopes as keywords too, matching `Memory.add`'s signature.
+
+
 ## v0.11.0 (2026-07-01)
 
 ### Features

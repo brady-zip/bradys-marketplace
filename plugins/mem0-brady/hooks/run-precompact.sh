@@ -9,31 +9,11 @@
 # Fail-open: a missing env/key/install just skips.
 set -euo pipefail
 
-ENV_FILE="${MEM0_BRADY_ENV:-$HOME/.config/mem0-brady/.env}"
-if [ -f "$ENV_FILE" ]; then
-  set -a
-  # shellcheck disable=SC1090
-  . "$ENV_FILE"
-  set +a
-fi
-
-# Capture via the MCP server when this install points at an external stack:
-# the server performs the memory write AND the handoff synthesis (its
-# synthesize_handoff tool), so the host needs no LLM provider or API key. All
-# file IO — transcript read, handoff write — stays here, on the host.
-# The fork reads MEM0_MCP_URL; bridge the plugin's namespaced key onto it.
-if [ "${MEM0_BRADY_STACK:-managed}" = "external" ] && [ -n "${MEM0_BRADY_MCP_URL:-}" ]; then
-  export MEM0_MCP_URL="$MEM0_BRADY_MCP_URL"
-fi
-
-export PATH="$HOME/.local/bin:$PATH"
-
-case "${CLAUDE_PROJECT_DIR:-$PWD}" in
-  *evergreen*) _mem0_domain=evergreen ;;
-  *) _mem0_domain=general ;;
-esac
-export MEM0_APP_ID="$_mem0_domain"
-export MEM0_RECALL_APP_IDS="$_mem0_domain"
+# Config file, MCP-URL bridge, PATH, and every mem0 scope — see lib-scope.sh.
+# Shares the capture path with the Stop hook, so it shares its scoping too.
+# shellcheck source=lib-scope.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib-scope.sh"
+mem0_scope_init
 
 if ! command -v mem0-hook-precompact >/dev/null 2>&1; then
   printf '%s\n' '{"continue": true, "suppressOutput": true}'

@@ -62,6 +62,10 @@ or a handoff says to run `/mem0-brady:workstream <slug>`:
 4. Relay the printed Goal + Pieces. **State explicitly** that each piece's current state lives
    in its referenced handoff and you'll read it on demand — it is not auto-loaded. If the user
    wants the latest state of a sibling piece, `Read` that piece's handoff file.
+5. If the user is picking work back up (rather than just asking what the workstream is), search
+   the run scope for the cross-session narrative instead of reading every handoff:
+   `mcp__mem0__search_memories(query="<what they're resuming>", run_id="<slug>")`. That is
+   where "what was tried / decided / broke" lives — see **Relationship to passive memory**.
 
 **Other intents:**
 
@@ -76,11 +80,13 @@ or a handoff says to run `/mem0-brady:workstream <slug>`:
 
 ## The details doc
 
-`~/.local/share/mem0-brady/workstreams/<slug>.md` is the source of truth and is safe to
-hand-edit. The skill fully manages the **Pieces** section (one entry per worktree, deduped by
-cwd) and bumps `updated`; it sets the **Goal** only when it's still the placeholder (edit the
-doc directly to revise an existing goal); and it leaves the **References** section verbatim for
-your free-form notes (PRs, commits, issues, links).
+`~/.local/share/mem0-brady/workstreams/<slug>.md` is the source of truth for everything that
+must be enumerated exactly, and is safe to hand-edit. The skill fully manages the **Pieces**
+section (one entry per worktree, deduped by cwd) and bumps `updated`; it sets the **Goal** only
+when it's still the placeholder (edit the doc directly to revise an existing goal); it rewrites
+the **Narrative** section, which is a fixed pointer at the run scope rather than content
+(backfilled into docs created before run_id scoping); and it leaves **References** verbatim for
+your free-form pointers (PRs, commits, issues, links).
 
 ## Pieces are a byproduct of activation
 
@@ -98,9 +104,28 @@ Stop/PreCompact hooks report; the tag is `workstreams/active/<session_id>.json`.
 
 ## Relationship to passive memory
 
-Activation doesn't write to Mem0. Separately, while a session is tagged, the Stop hook tags its
-auto-captured session summary with `workstream_id` so `/mem0-brady:digest` and passive recall
-can filter by workstream — additive, with the file doc remaining the source of truth.
+Activation doesn't write to Mem0. Separately, while a session is tagged, the Stop hook writes
+its auto-captured session summary under **`run_id=<slug>`** — a real mem0 scope, not a metadata
+tag, so `search_memories` / `get_memories` / `delete_entities` filter on it server-side.
+
+That split is deliberate, and it is what keeps a long-lived workstream from outgrowing its doc:
+
+| Where | Holds | Because |
+| ----- | ----- | ------- |
+| the **doc** | goal, config, artifact pointers (PRs, issues, links), the Pieces index | must be enumerated exactly and completely — ranking would hide entries |
+| **`run_id`** in mem0 | cross-session narrative: what was tried, what was decided, what broke | wanted by relevance, not in full; grows without bound, so it must not live somewhere you read top-to-bottom |
+| each piece's **handoff** | that worktree's *current* state | already per-cwd and rewritten each turn |
+
+So when catching up on a workstream, **search the run scope** rather than reading everything:
+
+```
+mcp__mem0__search_memories(query="<what you need>", run_id="<slug>")
+mcp__mem0__get_memories(run_id="<slug>")   # everything, newest first
+```
+
+Keep narrative *out* of the doc's References section. That section is for pointers; prose there
+accumulates every session and is pruned by nobody, which is precisely the failure this split
+fixes. Retiring a finished workstream's history is one `delete_entities(run_id=<slug>)` call.
 
 ## Footer badge (open the active workstream doc)
 
