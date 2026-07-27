@@ -42,6 +42,23 @@ case "$tool_name" in
   *) exit 0 ;;
 esac
 
+# The claude.ai CONNECTOR exposes the same server under a different namespace,
+# `mcp__claude_ai_mem0__*`, and a write through it carries no app_id — the
+# server falls back to its own default and the memory lands outside the
+# partition this session reads from.
+#
+# The matcher in hooks.json has to name both namespaces statically: a hook that
+# never fires cannot be switched on from inside itself. So the gate is here, and
+# it is OPT-IN — the connector path is reached by clients this plugin does not
+# otherwise touch (claude.ai, cloud containers), where an unexpected
+# updatedInput is a worse failure than an untagged write. Set
+# MEM0_ENFORCE_CONNECTOR_TOOLS=1 once that path is verified on a given host.
+case "$tool_name" in
+  mcp__claude_ai_mem0__*)
+    [ "${MEM0_ENFORCE_CONNECTOR_TOOLS:-0}" = "1" ] || exit 0
+    ;;
+esac
+
 cwd="$(printf '%s' "$input" | jq -r '.cwd // empty')"
 [ -z "$cwd" ] && cwd="$PWD"
 mem0_scope_init "$cwd"

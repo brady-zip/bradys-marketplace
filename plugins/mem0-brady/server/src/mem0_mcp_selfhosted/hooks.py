@@ -55,6 +55,25 @@ def _int_env(name: str, default: int) -> int:
     return value if value >= 0 else default
 
 
+def _bool_env(name: str, default: bool) -> bool:
+    """Read a boolean from the environment, falling back on anything unrecognised.
+
+    Deliberately strict about what counts as off. These flags disable memory,
+    and a typo that silently reads as "off" would produce exactly the failure
+    this codebase keeps designing against: a session that looks entirely normal
+    while capturing nothing. An unrecognised value keeps the default and says so.
+    """
+    raw = os.environ.get(name, "").strip().lower()
+    if not raw:
+        return default
+    if raw in ("1", "true", "yes", "on"):
+        return True
+    if raw in ("0", "false", "no", "off"):
+        return False
+    logger.warning("%s=%r is not a boolean — using default %s", name, raw, default)
+    return default
+
+
 # Capture thresholds. Tunable from the config so trimming a noisy store does not
 # mean editing the fork. The comparison is AND, so a turn is skipped only when
 # BOTH sides are small — these are floors for "did anything happen", not budgets.
@@ -77,6 +96,22 @@ _CAPTURE_MIN_INTERVAL = _int_env("MEM0_CAPTURE_MIN_INTERVAL", 900)
 _HANDOFF_MIN_INTERVAL = _int_env("MEM0_HANDOFF_MIN_INTERVAL", 180)
 _MAX_CONTENT_LEN = 4000
 _RECENT_WINDOW = 6  # last ~3 exchanges (user+assistant pairs)
+
+# Master switches for the two things the Stop/PreCompact path produces. The
+# intervals above throttle; these turn a side off outright, which the intervals
+# cannot express (0 disables the DEBOUNCE, not the write).
+#
+# Both exist for hosts where one half is wrong and the other is fine:
+#
+# - Capture off. An unattended or automated run that already produces its own
+#   durable record — a CI job, a scheduled agent writing a committed run
+#   record — has nothing to gain from a sampled transcript window, and would
+#   dilute a store that interactive sessions recall from.
+# - Handoff off. The handoff is a FILE, so it is only worth writing where the
+#   filesystem outlives the session. On an ephemeral host it is synthesised
+#   (one completion, billed) and then discarded with the container.
+_CAPTURE_ENABLED = _bool_env("MEM0_CAPTURE_ENABLED", True)
+_HANDOFF_ENABLED = _bool_env("MEM0_HANDOFF_ENABLED", True)
 
 _HANDOFF_DIR_ENV = "MEM0_HANDOFF_DIR"
 _HANDOFF_RECALL_MAX = 4  # mem0 memories folded into the synthesis prompt
@@ -737,6 +772,12 @@ def _capture_summary(
     ``app_id``. Returns the handoff file path (for the caller's systemMessage)
     or None when nothing meaningful was captured / written.
     """
+    # Nothing to produce — skip before reading a transcript that can reach
+    # ~900 KB and before opening a client, so a host that wants neither pays
+    # nothing per turn rather than doing the work and discarding it.
+    if not _CAPTURE_ENABLED and not _HANDOFF_ENABLED:
+        return None
+
     if not transcript_path or not Path(transcript_path).is_file():
         return None
 
@@ -806,7 +847,9 @@ def _capture_summary(
     # hook fires every turn, so without this, capture volume tracks turn count
     # rather than information, producing near-duplicate extractions of an
     # overlapping transcript window.
-    if _is_debounced(_last_capture_path(cwd, project_name), _CAPTURE_MIN_INTERVAL):
+    if not _CAPTURE_ENABLED:
+        logger.debug("memory capture disabled by MEM0_CAPTURE_ENABLED")
+    elif _is_debounced(_last_capture_path(cwd, project_name), _CAPTURE_MIN_INTERVAL):
         logger.debug("memory capture debounced for %s", cwd)
     else:
         mem.add(
@@ -822,6 +865,9 @@ def _capture_summary(
     # — so it refreshes on a shorter interval rather than every turn. Its own
     # file mtime is the marker; no extra state. Returning None when skipped
     # keeps the caller from announcing a handoff it did not just write.
+    if not _HANDOFF_ENABLED:
+        logger.debug("handoff synthesis disabled by MEM0_HANDOFF_ENABLED")
+        return None
     if _is_debounced(_handoff_path_for(cwd, project_name), _HANDOFF_MIN_INTERVAL):
         logger.debug("handoff refresh debounced for %s", cwd)
         return None
