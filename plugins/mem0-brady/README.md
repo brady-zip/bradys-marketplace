@@ -152,6 +152,61 @@ than an embedded on-disk store) is required because Qdrant's embedded mode takes
 per-process lock** — it can't be shared by the MCP server, the hooks, concurrent Claude sessions,
 and the Hal gateway at once. The server handles concurrent access cleanly.
 
+## Capture policy: which sessions write
+
+The Stop/PreCompact path produces two things, and they are switched independently:
+
+- **capture** — the session-summary memory written to the store.
+- **handoff** — the synthesized recap file. Not purely cross-session: PreCompact writes it
+  and the post-compact `SessionStart` reads it back, so it still earns its keep inside one
+  long session on a host whose disk is thrown away afterwards.
+
+Their **defaults come from `CLAUDE_CODE_ENTRYPOINT`**, which Claude Code exports into every
+hook subprocess. It is the only signal available at hook time that separates the two cloud
+populations — they share one container image, one config file and one env, so nothing under
+`~/.config` can tell them apart.
+
+| `CLAUDE_CODE_ENTRYPOINT` | what it is | capture | handoff |
+| ------------------------ | ---------- | ------- | ------- |
+| `remote_trigger` | a scheduled routine (autonomous loop) | off | off |
+| `remote_desktop` | an ad-hoc cloud task you kicked off | on | on |
+| `cli`, `vscode`, anything else, unset | interactive | on | on |
+
+`remote_trigger` is off because those loops already commit their own run record
+(`docs/*-blocks/`): a sampled transcript window adds nothing and dilutes the store that
+interactive sessions recall from, and their resume story is that committed record rather
+than a billed recap. `remote_desktop` is a human working conversationally — the same shape
+as a local session, so it gets the same behaviour, listed explicitly rather than left to
+fall through. Unknown entrypoints stay **on**: a new interactive surface that silently
+records nothing is indistinguishable from a healthy one.
+
+Override per host in `~/.config/mem0-brady/.env` (an explicit value always beats the
+entrypoint default, in both directions):
+
+```sh
+MEM0_CAPTURE_ENABLED=0      # 1/true/yes/on · 0/false/no/off. Unrecognised = keep default, with a warning.
+MEM0_HANDOFF_ENABLED=0
+```
+
+These are **master switches**, which `MEM0_CAPTURE_MIN_INTERVAL` / `MEM0_HANDOFF_MIN_INTERVAL`
+cannot express: `0` there disables the *debounce*, not the write. With both off, the Stop hook
+returns before reading the transcript or opening a client.
+
+`/mem0-brady:doctor` reports the resolved policy — and names *what* decided it — under
+**Capture policy**. It resolves this by importing the module that decides rather than
+restating the table, so it cannot drift into being confidently wrong.
+
+One related switch, for the claude.ai **connector** namespace (`mcp__claude_ai_mem0__*`),
+whose writes otherwise carry no `app_id` and land outside the partition this session reads:
+
+```sh
+MEM0_ENFORCE_CONNECTOR_TOOLS=1   # default 0 — scope-inject connector writes too
+```
+
+It is opt-in because that path is reached by clients this plugin does not otherwise touch,
+where an unexpected `updatedInput` is a worse failure than an untagged write. Turn it on per
+host once verified there.
+
 ## Digest: is the memory layer useful?
 
 `/mem0-brady:digest` answers "did memory pull its weight?" by reporting both sides of the
