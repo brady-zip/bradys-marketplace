@@ -49,6 +49,17 @@ MCP_URL_ENV = "MEM0_MCP_URL"
 _DEFAULT_TIMEOUT = 8.0
 _TIMEOUT_ENV = "MEM0_MCP_TIMEOUT"
 
+#: Extra HTTP headers, as a JSON object, sent on every request.
+#:
+#: Deployment auth. This server is commonly published through a tunnel (see the
+#: module docstring), and the access layer in front of it authenticates by
+#: header — a Cloudflare Access service token, a reverse-proxy bearer. Without
+#: this the hooks can only reach a server that needs no authentication, i.e.
+#: loopback, which silently excludes every remote or ephemeral host from passive
+#: recall and capture: the request 401s, ``call_tool`` returns None, and the
+#: session starts looking perfectly normal with memory doing nothing.
+_HEADERS_ENV = "MEM0_MCP_HEADERS"
+
 
 def mcp_url() -> str:
     """Configured MCP endpoint, or "" when direct mode is wanted."""
@@ -76,6 +87,33 @@ def _timeout() -> float:
         return _DEFAULT_TIMEOUT
 
 
+def _headers() -> dict[str, str] | None:
+    """Extra request headers from the environment, or None when unset/invalid.
+
+    Fails OPEN like everything else on this path: a malformed value degrades to
+    "no extra headers" — and therefore, behind an access layer, to no recall —
+    rather than raising inside a hook and taking the session down with it. It
+    warns rather than staying silent, because the two failure modes look
+    identical from the outside and only the log distinguishes "no auth
+    configured" from "auth configured wrong".
+    """
+    raw = os.environ.get(_HEADERS_ENV, "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        logger.warning("%s is not valid JSON — sending no extra headers", _HEADERS_ENV)
+        return None
+    if not isinstance(parsed, dict):
+        logger.warning("%s must be a JSON object — sending no extra headers", _HEADERS_ENV)
+        return None
+    # Coerce rather than reject: a token written unquoted in a .env parses as a
+    # number or bool, and dropping the whole header set over that would disable
+    # auth for a value that was very nearly right.
+    return {str(key): str(value) for key, value in parsed.items()}
+
+
 async def _call_tool_async(url: str, name: str, arguments: dict, timeout: float) -> str:
     """One-shot MCP session: connect, initialize, call, return the text payload."""
     # Imported lazily so merely importing this module costs nothing on the
@@ -86,7 +124,7 @@ async def _call_tool_async(url: str, name: str, arguments: dict, timeout: float)
     from mcp.client.streamable_http import streamablehttp_client
 
     async with streamablehttp_client(
-        url, timeout=timedelta(seconds=timeout)
+        url, headers=_headers(), timeout=timedelta(seconds=timeout)
     ) as (read, write, _):
         async with ClientSession(read, write) as session:
             await session.initialize()

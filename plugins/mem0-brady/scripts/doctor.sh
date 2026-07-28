@@ -149,6 +149,49 @@ else
   pass "qdrant: ${QDRANT_URL}"
 fi
 
+# --- Capture policy ----------------------------------------------------------
+# What the Stop/PreCompact hooks will actually DO here, as opposed to what is
+# installed. Its own section because the defaults are per-ENTRYPOINT: two cloud
+# containers off one image, with byte-identical config, capture differently.
+# A session that records nothing is indistinguishable from a healthy one while
+# you are inside it, so this is the only place that difference is visible.
+#
+# The policy is NOT restated here. It is resolved by importing the module that
+# decides (hooks.py) under the interpreter the hooks themselves run on, because
+# a second copy of the table in bash is precisely the drift that would make this
+# check confidently wrong.
+print_header "Capture policy"
+EP_RAW="${CLAUDE_CODE_ENTRYPOINT:-}"
+pass "entrypoint: ${EP_RAW:-(unset — not launched by Claude Code)}"
+HOOK_BIN="$(command -v mem0-hook-stop 2>/dev/null || true)"
+if [ -n "$HOOK_BIN" ]; then
+  HOOK_PY="$(head -1 "$HOOK_BIN" | sed 's/^#!//' || true)"
+  if [ -x "$HOOK_PY" ]; then
+    # A switch set only in the config has to be honored here exactly as the
+    # hooks will honor it — but lifted key by key rather than by sourcing the
+    # file, which would export OPENAI_API_KEY into this shell and its children
+    # (the reason env_get exists at all).
+    POLICY="$(
+      MEM0_CAPTURE_ENABLED="${MEM0_CAPTURE_ENABLED:-$(env_get MEM0_CAPTURE_ENABLED)}" \
+      MEM0_HANDOFF_ENABLED="${MEM0_HANDOFF_ENABLED:-$(env_get MEM0_HANDOFF_ENABLED)}" \
+      "$HOOK_PY" -c 'import mem0_mcp_selfhosted.hooks as h
+for label, on, var in (
+    ("capture", h._CAPTURE_ENABLED, "MEM0_CAPTURE_ENABLED"),
+    ("handoff", h._HANDOFF_ENABLED, "MEM0_HANDOFF_ENABLED"),
+):
+    print(f"{label} ON" if on else f"{label} OFF  ({h._disabled_by(var)})")' 2>/dev/null)"
+    if [ -n "$POLICY" ]; then
+      printf '%s\n' "$POLICY" | while IFS= read -r line; do pass "$line"; done
+    else
+      fail_optional "could not resolve capture policy from the installed hooks" \
+        "Reinstall: uv tool install --force <plugin>/server"
+    fi
+  fi
+else
+  fail_optional "mem0-hook-stop not on PATH — capture policy unknown" \
+    "Run /mem0-brady:setup, then re-run doctor."
+fi
+
 # --- Config ------------------------------------------------------------------
 print_header "Config (required)"
 if [ -f "$ENV_FILE" ]; then

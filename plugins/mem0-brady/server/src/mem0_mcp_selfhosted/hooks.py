@@ -55,6 +55,25 @@ def _int_env(name: str, default: int) -> int:
     return value if value >= 0 else default
 
 
+def _bool_env(name: str, default: bool) -> bool:
+    """Read a boolean from the environment, falling back on anything unrecognised.
+
+    Deliberately strict about what counts as off. These flags disable memory,
+    and a typo that silently reads as "off" would produce exactly the failure
+    this codebase keeps designing against: a session that looks entirely normal
+    while capturing nothing. An unrecognised value keeps the default and says so.
+    """
+    raw = os.environ.get(name, "").strip().lower()
+    if not raw:
+        return default
+    if raw in ("1", "true", "yes", "on"):
+        return True
+    if raw in ("0", "false", "no", "off"):
+        return False
+    logger.warning("%s=%r is not a boolean — using default %s", name, raw, default)
+    return default
+
+
 # Capture thresholds. Tunable from the config so trimming a noisy store does not
 # mean editing the fork. The comparison is AND, so a turn is skipped only when
 # BOTH sides are small — these are floors for "did anything happen", not budgets.
@@ -77,6 +96,70 @@ _CAPTURE_MIN_INTERVAL = _int_env("MEM0_CAPTURE_MIN_INTERVAL", 900)
 _HANDOFF_MIN_INTERVAL = _int_env("MEM0_HANDOFF_MIN_INTERVAL", 180)
 _MAX_CONTENT_LEN = 4000
 _RECENT_WINDOW = 6  # last ~3 exchanges (user+assistant pairs)
+
+# Master switches for the two things the Stop/PreCompact path produces. The
+# intervals above throttle; these turn a side off outright, which the intervals
+# cannot express (0 disables the DEBOUNCE, not the write).
+#
+# Both exist for hosts where one half is wrong and the other is fine:
+#
+# - Capture off. An unattended or automated run that already produces its own
+#   durable record — a CI job, a scheduled agent writing a committed run
+#   record — has nothing to gain from a sampled transcript window, and would
+#   dilute a store that interactive sessions recall from.
+# - Handoff off. The handoff is a FILE, so it is only worth writing where
+#   something later reads it back. It is synthesised by one chat completion per
+#   write, so on a host where nothing ever will, that is pure spend.
+#
+# Their DEFAULTS are per-entrypoint. Claude Code exports CLAUDE_CODE_ENTRYPOINT
+# into every hook subprocess, and it is the only signal available at hook time
+# that separates the two cloud populations: they share one container image, one
+# config file and one env, so nothing under ~/.config can tell them apart.
+#
+#   remote_trigger — a scheduled routine. Unattended, and the loops that run
+#     this way already commit their own run record (docs/*-blocks/), so a
+#     sampled transcript window adds nothing and dilutes the store interactive
+#     sessions recall from. Its resume story is that committed record, not a
+#     billed recap, so the handoff goes too.
+#   remote_desktop — an ad-hoc cloud task, kicked off by a human and worked
+#     conversationally. That is the same shape as a local session, so it gets
+#     the same behaviour. Listed explicitly rather than left to the fallback:
+#     this population was decided, not defaulted into.
+#
+# Note the handoff is NOT purely cross-session, which is why an ephemeral host
+# does not imply handoff-off: PreCompact writes one and the post-compact
+# SessionStart reads it back, so it earns its cost inside a single long session
+# on a container whose disk is discarded at the end.
+#
+# Anything else — cli, vscode, an entrypoint that ships after this was written —
+# keeps both on. Unknown has to fail toward capturing: a new interactive surface
+# that silently records nothing is the failure mode this file keeps designing
+# against, because it is indistinguishable from a healthy session.
+_ENTRYPOINT_DEFAULTS = {
+    "remote_trigger": {"capture": False, "handoff": False},
+    "remote_desktop": {"capture": True, "handoff": True},
+}
+_ENTRYPOINT_FALLBACK = {"capture": True, "handoff": True}
+_ENTRYPOINT = os.environ.get("CLAUDE_CODE_ENTRYPOINT", "").strip().lower()
+_ENTRYPOINT_POLICY = _ENTRYPOINT_DEFAULTS.get(_ENTRYPOINT, _ENTRYPOINT_FALLBACK)
+
+# An explicit env var still wins, so one host can overrule its entrypoint's
+# policy without editing the table above.
+_CAPTURE_ENABLED = _bool_env("MEM0_CAPTURE_ENABLED", _ENTRYPOINT_POLICY["capture"])
+_HANDOFF_ENABLED = _bool_env("MEM0_HANDOFF_ENABLED", _ENTRYPOINT_POLICY["handoff"])
+
+
+def _disabled_by(name: str) -> str:
+    """Name what actually turned a switch off — the env var or the entrypoint.
+
+    Worth the six lines: "disabled by MEM0_CAPTURE_ENABLED" on a host that never
+    sets it sends whoever is debugging to grep a config file for a variable that
+    is not in it.
+    """
+    raw = os.environ.get(name, "").strip().lower()
+    if raw in ("0", "false", "no", "off"):
+        return f"{name}={raw}"
+    return f"CLAUDE_CODE_ENTRYPOINT={_ENTRYPOINT or '(unset)'}"
 
 _HANDOFF_DIR_ENV = "MEM0_HANDOFF_DIR"
 _HANDOFF_RECALL_MAX = 4  # mem0 memories folded into the synthesis prompt
@@ -737,6 +820,12 @@ def _capture_summary(
     ``app_id``. Returns the handoff file path (for the caller's systemMessage)
     or None when nothing meaningful was captured / written.
     """
+    # Nothing to produce — skip before reading a transcript that can reach
+    # ~900 KB and before opening a client, so a host that wants neither pays
+    # nothing per turn rather than doing the work and discarding it.
+    if not _CAPTURE_ENABLED and not _HANDOFF_ENABLED:
+        return None
+
     if not transcript_path or not Path(transcript_path).is_file():
         return None
 
@@ -806,7 +895,9 @@ def _capture_summary(
     # hook fires every turn, so without this, capture volume tracks turn count
     # rather than information, producing near-duplicate extractions of an
     # overlapping transcript window.
-    if _is_debounced(_last_capture_path(cwd, project_name), _CAPTURE_MIN_INTERVAL):
+    if not _CAPTURE_ENABLED:
+        logger.debug("memory capture disabled by %s", _disabled_by("MEM0_CAPTURE_ENABLED"))
+    elif _is_debounced(_last_capture_path(cwd, project_name), _CAPTURE_MIN_INTERVAL):
         logger.debug("memory capture debounced for %s", cwd)
     else:
         mem.add(
@@ -822,6 +913,11 @@ def _capture_summary(
     # — so it refreshes on a shorter interval rather than every turn. Its own
     # file mtime is the marker; no extra state. Returning None when skipped
     # keeps the caller from announcing a handoff it did not just write.
+    if not _HANDOFF_ENABLED:
+        logger.debug(
+            "handoff synthesis disabled by %s", _disabled_by("MEM0_HANDOFF_ENABLED")
+        )
+        return None
     if _is_debounced(_handoff_path_for(cwd, project_name), _HANDOFF_MIN_INTERVAL):
         logger.debug("handoff refresh debounced for %s", cwd)
         return None

@@ -66,7 +66,7 @@
         ]
       },
       {
-        "matcher": "mcp__mem0__.*",
+        "matcher": "mcp__mem0__.*|mcp__claude_ai_mem0__.*",
         "hooks": [
           {
             "type": "command",
