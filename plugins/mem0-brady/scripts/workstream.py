@@ -27,8 +27,9 @@ overarching goal. This script maintains, per workstream ``<slug>``:
         <data>/mem0-brady/workstreams/active/<session_id>.json
 
     The fork's Stop / PreCompact hooks read this (via ``hook_input.session_id``)
-    to fold the workstream overview into the handoff and bake the re-activation
-    call in, so the workstream rides the handoff chain forward.
+    to decide whether to write a handoff at all — only a tagged session gets one
+    — and, when they do, to fold the workstream overview in and bake the
+    re-activation call in, so the workstream rides the handoff chain forward.
 
 Paths and the cwd hash scheme are kept in lockstep with the fork's
 ``_workstream_dir`` / ``_handoff_path_for`` and the plugin's per-cwd session
@@ -341,11 +342,13 @@ def cmd_activate(rest: list[str]) -> int:
     print(f"{'Created and activated' if created else 'Activated'} workstream '{slug}'.")
     print(f"Doc: {doc}")
     if sid:
-        print(f"Tagged this session ({sid}) via {src} — Stop/PreCompact handoffs are now workstream-aware.")
+        print(f"Tagged this session ({sid}) via {src} — Stop/PreCompact will now write a "
+              "workstream-aware handoff for this cwd.")
     else:
         print("WARNING: could not resolve this session's id (no per-cwd marker, no "
-              "CLAUDE_CODE_SESSION_ID). The doc was updated, but the handoff won't be "
-              "tagged for this session — re-run after the SessionStart hook has run.")
+              "CLAUDE_CODE_SESSION_ID). The doc was updated, but this session is NOT "
+              "tagged, so it will write no handoff — re-run after the SessionStart hook "
+              "has run.")
     print()
     _print_overview(doc)
     return 0

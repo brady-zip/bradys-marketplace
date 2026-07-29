@@ -334,6 +334,24 @@ class TestReadRecentMessages:
 
 
 class TestStopMain:
+    @pytest.fixture(autouse=True)
+    def _isolate_hook_state(self, tmp_path, monkeypatch):
+        """Isolate on-disk hook state and pin the capture floors.
+
+        The state dirs must be per-test because the capture debounce marker
+        lives beside the handoff file: pointed at the real data dir, a second
+        run inside MEM0_CAPTURE_MIN_INTERVAL finds a fresh marker and skips the
+        write, so these tests would pass or fail depending on when they last ran.
+
+        The floors are pinned because these tests assert the short-session
+        *rule*, not the shipped defaults — which are env-tunable
+        (MEM0_MIN_USER_LEN / MEM0_MIN_ASSISTANT_LEN) and have since been raised.
+        """
+        monkeypatch.setenv("MEM0_HANDOFF_DIR", str(tmp_path / "handoffs"))
+        monkeypatch.setenv("MEM0_WORKSTREAM_DIR", str(tmp_path / "workstreams"))
+        monkeypatch.setattr(hooks, "_MIN_USER_LEN", 20)
+        monkeypatch.setattr(hooks, "_MIN_ASSISTANT_LEN", 50)
+
     def _make_transcript(self, tmp_path, messages):
         """Write a JSONL transcript file and return its path."""
         p = tmp_path / "transcript.jsonl"
@@ -566,14 +584,24 @@ class TestPreviousHandoff:
         out = hooks._read_previous_handoff(self.CWD, self.PROJECT)
         assert len(out) == hooks._HANDOFF_PREV_MAX
 
+    def _local_llm_mem(self):
+        """A client with no ``synthesize_handoff`` — i.e. the in-process path.
+
+        A bare MagicMock auto-creates that attribute, which would silently route
+        synthesis through the server-side branch and never touch ``mem.llm``.
+        """
+        mock_mem = MagicMock()
+        del mock_mem.synthesize_handoff
+        mock_mem.search.return_value = []
+        return mock_mem
+
     def test_synthesis_folds_in_previous_handoff(self, tmp_path, monkeypatch):
         """The prior recap is included in the LLM synthesis prompt."""
         self._write_prior(
             tmp_path, monkeypatch,
             "**Goal** — migrate the auth layer to JWT.\n**Next** — add refresh tokens.\n",
         )
-        mock_mem = MagicMock()
-        mock_mem.search.return_value = []
+        mock_mem = self._local_llm_mem()
         mock_mem.llm.generate_response.return_value = "**Goal** — updated recap."
 
         out = hooks._synthesize_handoff(
@@ -589,8 +617,7 @@ class TestPreviousHandoff:
     def test_synthesis_placeholder_when_no_previous(self, tmp_path, monkeypatch):
         """First handoff for a project gets a clear placeholder, not a crash."""
         monkeypatch.setenv("MEM0_HANDOFF_DIR", str(tmp_path))
-        mock_mem = MagicMock()
-        mock_mem.search.return_value = []
+        mock_mem = self._local_llm_mem()
         mock_mem.llm.generate_response.return_value = "**Goal** — first recap."
 
         hooks._synthesize_handoff(
@@ -599,6 +626,117 @@ class TestPreviousHandoff:
 
         prompt = mock_mem.llm.generate_response.call_args.kwargs["messages"][0]["content"]
         assert "first handoff for this project" in prompt
+
+
+# ---------------------------------------------------------------------------
+# 6.46  the handoff is gated on an active workstream
+# ---------------------------------------------------------------------------
+
+
+class TestHandoffRequiresWorkstream:
+    """Only a workstream-tagged session gets a handoff; capture is ungated.
+
+    The handoff is the workstream's per-piece resume doc. An untagged session has
+    no thread to resume into, so writing one bills a synthesis completion per
+    turn for a file nothing will look for. Passive capture is a separate output
+    and keeps running for every session.
+    """
+
+    SESSION = "sess-ws"
+    CWD = "/home/user/myproject"
+    SLUG = "ship-the-parser"
+
+    @pytest.fixture(autouse=True)
+    def _dirs(self, tmp_path, monkeypatch):
+        self.handoffs = tmp_path / "handoffs"
+        self.workstreams = tmp_path / "workstreams"
+        monkeypatch.setenv("MEM0_HANDOFF_DIR", str(self.handoffs))
+        monkeypatch.setenv("MEM0_WORKSTREAM_DIR", str(self.workstreams))
+        monkeypatch.setattr(hooks, "_MIN_USER_LEN", 20)
+        monkeypatch.setattr(hooks, "_MIN_ASSISTANT_LEN", 50)
+
+    def _activate(self, payload=None):
+        """Write the active-workstream pointer the skill would write."""
+        active = self.workstreams / "active"
+        active.mkdir(parents=True, exist_ok=True)
+        body = {"slug": self.SLUG, "cwd": self.CWD} if payload is None else payload
+        (active / f"{self.SESSION}.json").write_text(json.dumps(body), encoding="utf-8")
+
+    def _run(self, tmp_path):
+        """Drive stop_main over a meaningful transcript; return (response, mem)."""
+        transcript = tmp_path / "transcript.jsonl"
+        transcript.write_text("\n".join(json.dumps(m) for m in [
+            {"role": "user", "content": "Wire the CLI up to the new parser entry point"},
+            {"role": "assistant", "content": "Done — the CLI now calls parse_file() and reports errors with line numbers."},
+        ]))
+
+        mock_mem = MagicMock()
+        mock_mem.synthesize_handoff.return_value = "**Goal** — ship the parser.\n**Next** — wire the CLI."
+
+        stdin_data = json.dumps({
+            "session_id": self.SESSION,
+            "cwd": self.CWD,
+            "transcript_path": str(transcript),
+        })
+        with patch.object(hooks, "_get_memory", return_value=mock_mem):
+            resp = _capture_output(hooks.stop_main, stdin_data)
+        return resp, mock_mem
+
+    def _handoff_files(self):
+        return sorted(p.name for p in self.handoffs.glob("*.md"))
+
+    def test_untagged_session_writes_no_handoff(self, tmp_path):
+        """No pointer → no handoff file, and no synthesis call to pay for."""
+        resp, mock_mem = self._run(tmp_path)
+
+        assert resp["continue"] is True
+        assert self._handoff_files() == []
+        mock_mem.synthesize_handoff.assert_not_called()
+        # Nothing to announce, so the hook stays quiet.
+        assert "systemMessage" not in resp
+
+    def test_untagged_session_still_captures_to_mem0(self, tmp_path):
+        """The gate is on the handoff only — memory capture is unconditional."""
+        _, mock_mem = self._run(tmp_path)
+
+        mock_mem.add.assert_called_once()
+        # Untagged means no thread to file it under.
+        assert "run_id" not in mock_mem.add.call_args.kwargs
+
+    def test_tagged_session_writes_handoff(self, tmp_path):
+        """An active pointer produces the handoff, named in the systemMessage."""
+        self._activate()
+        resp, mock_mem = self._run(tmp_path)
+
+        files = self._handoff_files()
+        assert len(files) == 1
+        body = (self.handoffs / files[0]).read_text(encoding="utf-8")
+        assert f"- workstream: `{self.SLUG}`" in body
+        # The re-activation call is baked in deterministically, not by the LLM,
+        # so the thread survives into whatever session reads this next.
+        assert f"/mem0-brady:workstream {self.SLUG}" in body
+        assert files[0] in resp["systemMessage"]
+        assert mock_mem.add.call_args.kwargs["run_id"] == self.SLUG
+
+    def test_pointer_without_slug_is_untagged(self, tmp_path):
+        """A pointer that names no workstream fails open to "no handoff"."""
+        self._activate({"cwd": self.CWD})
+        _, mock_mem = self._run(tmp_path)
+
+        assert self._handoff_files() == []
+        mock_mem.synthesize_handoff.assert_not_called()
+
+    def test_refresh_debounced_for_tagged_session(self, tmp_path):
+        """The tagged path still honours the refresh interval."""
+        self._activate()
+        self._run(tmp_path)
+        resp, mock_mem = self._run(tmp_path)
+
+        # File is still there from the first run, but this run didn't rewrite it
+        # and so must not claim it did.
+        assert len(self._handoff_files()) == 1
+        mock_mem.synthesize_handoff.assert_not_called()
+        assert "systemMessage" not in resp
 
 
 # ---------------------------------------------------------------------------

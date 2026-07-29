@@ -589,10 +589,12 @@ def _read_previous_handoff(cwd: str, project_name: str) -> str:
 # ---------------------------------------------------------------------------
 # Workstreams  (multi-session work spanning worktrees; see the plugin skill
 # /mem0-brady:workstream). A session is tagged with a workstream by an active
-# pointer keyed on session_id; when present, the Stop / PreCompact hooks fold
-# the workstream's overview into the handoff recap and bake a re-activation
-# call into the file so the workstream rides the handoff chain forward. Every
-# helper fails open — an untagged session (no pointer) behaves exactly as before.
+# pointer keyed on session_id. The pointer is what GATES the handoff: only a
+# tagged session gets one, and there the Stop / PreCompact hooks fold the
+# workstream's overview into the recap and bake a re-activation call into the
+# file so the workstream rides the handoff chain forward. Every helper fails
+# open, and failing open means "untagged" — which now means no handoff, so a
+# broken pointer costs a resume doc, never a broken hook or a bogus workstream.
 # ---------------------------------------------------------------------------
 
 _WORKSTREAM_DIR_ENV = "MEM0_WORKSTREAM_DIR"
@@ -758,10 +760,14 @@ def _write_handoff(
 ) -> Path | None:
     """Synthesize and write the handoff markdown. Returns its path or None.
 
+    Only called for a session tagged with a *workstream* (``_capture_summary``
+    gates on it), so the recap is synthesized with the workstream overview and a
+    deterministic re-activation call is baked into the file for a resuming
+    session to re-tag itself. The parameter stays optional so the writer is
+    still exercisable on its own.
+
     Fail-open: any error is swallowed (logged) and returns None so the Stop /
-    PreCompact response is never broken. When *workstream* is set, the recap is
-    synthesized with the workstream overview and a deterministic re-activation
-    call is baked into the file so a resuming session re-tags itself.
+    PreCompact response is never broken.
     """
     try:
         body = _synthesize_handoff(mem, recent, project_name, cwd, workstream)
@@ -819,6 +825,9 @@ def _capture_summary(
     mem0 memory with ``source`` and (when MEM0_APP_ID is set) the domain
     ``app_id``. Returns the handoff file path (for the caller's systemMessage)
     or None when nothing meaningful was captured / written.
+
+    The two outputs have different conditions. The memory write happens for
+    every session; the handoff only for a session tagged with a workstream.
     """
     # Nothing to produce — skip before reading a transcript that can reach
     # ~900 KB and before opening a client, so a host that wants neither pays
@@ -909,15 +918,26 @@ def _capture_summary(
         )
         _mark_captured(cwd, project_name)
 
-    # The handoff is cheaper to justify but not free — one completion per write
-    # — so it refreshes on a shorter interval rather than every turn. Its own
-    # file mtime is the marker; no extra state. Returning None when skipped
-    # keeps the caller from announcing a handoff it did not just write.
+    # The handoff is a WORKSTREAM artifact: it is the per-piece current-state
+    # document a resuming session reads before re-activating the slug, and the
+    # carrier that keeps the thread alive across sessions and worktrees. An
+    # untagged session has no thread to resume into, so a handoff there bills a
+    # synthesis completion per turn for a file whose only reader is a resume
+    # that will never look for it. Passive capture above still runs for every
+    # session — that is the memory layer, and it is not gated on anything.
     if not _HANDOFF_ENABLED:
         logger.debug(
             "handoff synthesis disabled by %s", _disabled_by("MEM0_HANDOFF_ENABLED")
         )
         return None
+    if not workstream:
+        logger.debug("session %s has no active workstream — no handoff", session_id)
+        return None
+
+    # Not free even when it is wanted — one completion per write — so it
+    # refreshes on a shorter interval rather than every turn. Its own file mtime
+    # is the marker; no extra state. Returning None when skipped keeps the
+    # caller from announcing a handoff it did not just write.
     if _is_debounced(_handoff_path_for(cwd, project_name), _HANDOFF_MIN_INTERVAL):
         logger.debug("handoff refresh debounced for %s", cwd)
         return None

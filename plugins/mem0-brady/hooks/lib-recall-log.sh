@@ -72,9 +72,11 @@ mem0_write_cwd_session_marker() {
 
 # mem0_handoff_pointer <cwd>
 # Echo a one-line resume pointer if a recent handoff file exists for <cwd>, else
-# nothing. The handoff file is written by the fork's Stop/PreCompact hooks; this
-# only locates it (same path scheme: <project>-<sha1(cwd)[:8]>.md) so the
-# SessionStart steer can tell a fresh session a resume doc is waiting. Fail-open.
+# nothing. The handoff file is written by the fork's Stop/PreCompact hooks, and
+# only for a session tagged with a workstream — so most cwds have none and this
+# stays silent. It only locates the file (same path scheme:
+# <project>-<sha1(cwd)[:8]>.md) so the SessionStart steer can tell a fresh
+# session a resume doc is waiting. Fail-open.
 mem0_handoff_pointer() {
   local cwd="$1"
   [ -n "$cwd" ] || return 0

@@ -62,12 +62,13 @@ Memory is ONE store, sliced by four scopes. Use them:
 By KIND:
 - Explicit HARD FACTS (IPs, ports, versions, config values, ids, endpoints) -> save with ${PREFIX}add_memory, recall with ${PREFIX}search_memories. Search Mem0 before asking the user for an infra/config detail.
 - PASSIVE memory (session summaries, decisions, patterns) is captured automatically on Stop and recalled automatically on SessionStart — you don't hand-write it.
-- WORKING MEMORY on a large/ongoing task -> activate a workstream (/mem0-brady:workstream <slug>); capture then carries run_id=<slug> automatically. Pass run_id explicitly on ${PREFIX}search_memories to pull just that thread's history, ranked. (app_id is the coarse domain; run_id is the fine thread within it — orthogonal.)
+- WORKING MEMORY on a large/ongoing task -> activate a workstream (/mem0-brady:workstream <slug>); capture then carries run_id=<slug> automatically, AND Stop/PreCompact start writing a resume handoff for this cwd — an untagged session gets no handoff, so activate before a task you intend to resume later. Pass run_id explicitly on ${PREFIX}search_memories to pull just that thread's history, ranked. (app_id is the coarse domain; run_id is the fine thread within it — orthogonal.)
 - Native file-memory (the ~/.claude .../memory/ dir) is RETIRED: writes there are blocked and steered here."
 
 # If a recent resume-handoff file exists for this cwd (written by the fork's
-# Stop/PreCompact hooks), append a pointer so a fresh session can pick up where
-# the last one left off without reloading the whole history. Silent when none.
+# Stop/PreCompact hooks, and only for a workstream-tagged session), append a
+# pointer so a fresh session can pick up where the last one left off without
+# reloading the whole history. Silent when none — the common, untagged case.
 resume="$(mem0_handoff_pointer "$cwd" 2>/dev/null || true)"
 [ -n "$resume" ] && steer="$steer
 $resume"

@@ -1,20 +1,24 @@
 ---
 name: workstream
-description: Activate or manage a "workstream" — one thread of work that spans multiple Claude sessions, commits, branches, and worktrees, under a single overarching goal. Activating tags THIS session with the workstream, pulls its details doc (goal + an index of the pieces of work, each referencing its own handoff for current state), and makes the Stop/PreCompact handoffs workstream-aware so the workstream propagates to future sessions via the handoff chain. Use when the user says "activate workstream", "track this as a workstream", "what workstream am I on", "start/resume workstream <name>", or when a resume handoff says to run `/mem0-brady:workstream <slug>`.
+description: Activate or manage a "workstream" — one thread of work that spans multiple Claude sessions, commits, branches, and worktrees, under a single overarching goal. Activating tags THIS session with the workstream, pulls its details doc (goal + an index of the pieces of work, each referencing its own handoff for current state), and switches on the workstream-aware Stop/PreCompact handoff so the workstream propagates to future sessions via the handoff chain — an untagged session writes no handoff. Use when the user says "activate workstream", "track this as a workstream", "what workstream am I on", "start/resume workstream <name>", or when a resume handoff says to run `/mem0-brady:workstream <slug>`.
 ---
 
 # Workstreams
 
 A **workstream** groups multi-session work — spread across time, commits, branches, and
-worktrees — under one overarching goal. Each contributing worktree already gets its own
-per-cwd resume **handoff**; a workstream is the higher-level thread that ties those handoffs
-together and carries the shared goal forward.
+worktrees — under one overarching goal. Each contributing worktree gets its own per-cwd resume
+**handoff**; a workstream is the higher-level thread that ties those handoffs together and
+carries the shared goal forward.
 
 How it works:
 
 - **Tagging is manual + per-session.** A fresh session starts untagged. Running this skill
   tags *this* session (an active pointer keyed on `session_id`) and updates the workstream's
   details doc.
+- **Tagging is also what enables the handoff.** An untagged session writes none: the handoff
+  exists to carry a thread forward, so a session with no thread doesn't pay for one. Passive
+  memory capture is separate and runs regardless. This is worth saying out loud when the user
+  is starting work they mean to resume later — activating is the thing that makes it resumable.
 - **Propagation rides the handoff.** When a session is tagged, the fork's Stop / PreCompact
   hooks fold the workstream's overview into the handoff recap and bake a
   `/mem0-brady:workstream <slug>` call into it. A future session that resumes from that
@@ -114,7 +118,7 @@ That split is deliberate, and it is what keeps a long-lived workstream from outg
 | ----- | ----- | ------- |
 | the **doc** | goal, config, artifact pointers (PRs, issues, links), the Pieces index | must be enumerated exactly and completely — ranking would hide entries |
 | **`run_id`** in mem0 | cross-session narrative: what was tried, what was decided, what broke | wanted by relevance, not in full; grows without bound, so it must not live somewhere you read top-to-bottom |
-| each piece's **handoff** | that worktree's *current* state | already per-cwd and rewritten each turn |
+| each piece's **handoff** | that worktree's *current* state | already per-cwd, and refreshed as the piece is worked (only while tagged) |
 
 So when catching up on a workstream, **search the run scope** rather than reading everything:
 

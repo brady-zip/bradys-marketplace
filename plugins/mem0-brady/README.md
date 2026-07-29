@@ -33,9 +33,9 @@ Mem0 does **both** kinds of memory here:
   different machines, each bound to its own loopback. The source is never modified.
 - **`workstream` skill** — `/mem0-brady:workstream <slug>` groups multi-session work (spread
   across commits, branches, and worktrees) under one overarching goal: it tags the session,
-  maintains a referenceable details doc, and makes the Stop/PreCompact handoffs
-  workstream-aware so the workstream propagates to future sessions. See
-  [Workstreams](#workstreams).
+  maintains a referenceable details doc, and switches on the workstream-aware Stop/PreCompact
+  **handoff** so the thread propagates to future sessions. Tagging is what gates the handoff —
+  an untagged session writes none. See [Workstreams](#workstreams).
 
 (This replaced a Honcho-based passive layer — Mem0 now owns the implicit capture too.)
 
@@ -255,8 +255,14 @@ All guard actions are audited to `mem0_denials.log`.
 
 A **workstream** is one thread of work that spans multiple Claude sessions — spread across
 time, commits, branches, and worktrees — under a single overarching goal. The Stop/PreCompact
-handoff already captures *per-worktree* state (keyed by cwd); a workstream is the higher-level
-thread that ties related worktrees together.
+handoff captures *per-worktree* state (keyed by cwd); a workstream is the higher-level thread
+that ties related worktrees together.
+
+**Activating a workstream is what turns the handoff on.** An untagged session writes no handoff
+— the handoff exists to carry a thread forward, and a one-off session has no thread to resume
+into, so synthesizing a recap for it would bill a model call per turn for a file nothing looks
+for. Passive capture is unaffected: every session still writes its summary to memory. If you
+expect to resume this work, activate first.
 
 `/mem0-brady:workstream <slug>` **activates** a workstream for the current session:
 
@@ -272,8 +278,9 @@ thread that ties related worktrees together.
 
 While a session is tagged, the fork's Stop / PreCompact hooks:
 
-1. fold the workstream's overview (goal + sibling pieces) into the **handoff synthesis**, so
-   each per-worktree recap is situated within the larger goal;
+1. **write the handoff at all** (an untagged session gets none), folding the workstream's
+   overview (goal + sibling pieces) into the **synthesis** so each per-worktree recap is
+   situated within the larger goal;
 2. **bake a `/mem0-brady:workstream <slug>` call into the handoff**, so a session that resumes
    from it re-tags itself and pulls the workstream forward — the workstream rides the handoff
    chain across sessions and worktrees; and
@@ -383,6 +390,7 @@ Setup boots out any stale `com.mem0team.*` agents from the plugin's former name 
 The fork is pinned to a tagged release: `github.com/brady-zip/mem0-mcp-selfhosted@v0.11.0`
 (`app_id`-aware capture/recall, prompt/file-context/pre-compact lifecycle hooks, the
 `general` default for untagged writes, resume handoffs that build on the previous handoff for
-continuity, and workstream-aware handoffs that fold an active workstream's overview into the
-recap and bake its re-activation call in). Qdrant is pinned to `v1.18.2` (prebuilt
+continuity, and workstream-gated handoffs — written only for a tagged session, folding the
+workstream's overview into the recap and baking its re-activation call in). Qdrant is pinned to
+`v1.18.2` (prebuilt
 `*-apple-darwin` binary from GitHub releases).
