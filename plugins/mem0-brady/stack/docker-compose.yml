@@ -1,12 +1,16 @@
-# The external stack: Qdrant + the mem0 MCP server, in Docker.
+# The compose stack: Qdrant + the mem0 MCP server, in Docker.
 #
 # Lives here, beside the vendored fork it builds from, so the server image and
 # the plugin's recall/capture hooks are the SAME code by construction. When this
 # was a loose directory outside any repo, the image built from git while the
 # hooks ran the vendored source — nothing forced them to agree.
 #
-# Copy .env.example to .env and fill it in, then:
-#   docker compose --env-file .env up -d --build
+# Config comes from ~/.config/mem0-brady/.env — the SAME file the hooks source.
+# There is deliberately no .env beside this file: a second copy inside the source
+# tree is how a live API key ends up in a checkout and how edits land on the copy
+# nothing reads. Run /mem0-brady:setup, which owns that file and this stack, or
+# by hand:
+#   docker compose --env-file ~/.config/mem0-brady/.env up -d --build
 #
 # The compose project name defaults to mem0-host for continuity with the
 # pre-vendoring deployment. Changing it does NOT move data (the volume is a bind
@@ -26,9 +30,9 @@ services:
     image: qdrant/qdrant:latest
     restart: unless-stopped
     volumes:
-      # Absolute path, set in .env — deliberately not a relative path, so the
-      # data does not move just because this file did.
-      - ${MEM0_BRADY_QDRANT_STORAGE:?set MEM0_BRADY_QDRANT_STORAGE in stack/.env}:/qdrant/storage
+      # Absolute path, set in the config — deliberately not a relative path, so
+      # the data does not move just because this file did.
+      - ${MEM0_BRADY_QDRANT_STORAGE:?set MEM0_BRADY_QDRANT_STORAGE in ~/.config/mem0-brady/.env}:/qdrant/storage
     expose:
       - "6333"
     ports:
@@ -44,7 +48,10 @@ services:
       context: ..
       dockerfile: stack/Dockerfile
     restart: unless-stopped
-    env_file: .env
+    # Absolute, and the same file `--env-file` above resolves. Interpolated
+    # rather than hardcoded so this works for any $HOME and stays overridable
+    # for testing against a scratch config dir.
+    env_file: ${MEM0_BRADY_CONFIG_ENV:-$HOME/.config/mem0-brady/.env}
     depends_on:
       - qdrant
     ports:

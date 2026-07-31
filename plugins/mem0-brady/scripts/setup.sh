@@ -2,7 +2,7 @@
 #
 # One-time installer for the mem0-brady plugin. Run via /mem0-brady:setup.
 #
-# Two stacks are supported, chosen per install and recorded in the config as
+# Three stacks are supported, chosen per install and recorded in the config as
 # MEM0_BRADY_STACK:
 #
 #   managed  (default) — this plugin owns everything, no Docker:
@@ -10,11 +10,22 @@
 #       - a native Qdrant SERVER binary under launchd (isolated ports 6433/6434)
 #       - the mem0 MCP server under launchd, pointed at that Qdrant
 #
-#   external — you already run Qdrant + the mem0 MCP server (e.g. docker-compose).
-#       The hooks then drive mem0 THROUGH that server, so this host needs no
+#   compose  — this plugin owns everything, in Docker. Builds ../stack from the
+#       SAME vendored server the hooks install, so the image and the hooks are
+#       one codebase by construction, and brings it up. The whole configuration
+#       — the stack's half AND the hooks' half — lives in ONE file, this
+#       install's .env, which compose reads via --env-file and env_file: and the
+#       hooks read via `source`. Nothing configurable lives in the source tree.
+#
+#   external — somebody ELSE runs the mem0 MCP server and this host only talks
+#       to it (a tunnelled server, a cloud container booting from a shared
+#       config). The hooks drive mem0 THROUGH that server, so this host needs no
 #       Qdrant reachability, no API key, no store identity and no mem0 install
-#       — the server owns all of it. Setup writes a two-line config and a small
-#       MCP-only tool install. No Qdrant binary, no launchd agents.
+#       — the server owns all of it. Setup writes a small config and an
+#       MCP-only tool install. No Qdrant binary, no launchd agents, no Docker.
+#
+# compose vs external is "do I run the server?", not "is it in Docker?". Both
+# drive mem0 over MCP; only compose builds and starts anything.
 #
 # For a managed stack, store identity (collection / user_id / URLs) is
 # per-INSTALL, prompted here and stored in the config — never baked into the
@@ -43,6 +54,9 @@ DEFAULT_QDRANT_GRPC_PORT="6434"
 DEFAULT_MCP_PORT="8788"
 DEFAULT_COLLECTION="mem0_brady"
 DEFAULT_USER_ID="shared-bch"
+# Extraction model for a compose stack. OpenAI, not Anthropic: the fork's
+# Anthropic path returns empty facts, so infer=true would silently no-op.
+DEFAULT_LLM_MODEL="gpt-4o-mini"
 
 # --- Paths -------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -51,6 +65,10 @@ TEMPLATES="${SCRIPT_DIR}/templates"
 # Resolves for both `--plugin-dir` local iteration and the marketplace cache
 # path (~/.claude/plugins/cache/bradys-marketplace/mem0-brady/<version>/server).
 SERVER_DIR="$(cd "${SCRIPT_DIR}/../server" && pwd)"
+# The vendored compose stack, beside the server it builds from. Same resolution
+# story as SERVER_DIR: works from a --plugin-dir checkout and the marketplace
+# cache alike. Only used by the compose stack.
+STACK_DIR="$(cd "${SCRIPT_DIR}/../stack" && pwd 2>/dev/null || echo "${SCRIPT_DIR}/../stack")"
 # Overridable so the config can be relocated, and so the installer is testable
 # without writing to a real home. doctor.sh / migrate.sh / the hooks already
 # honor MEM0_BRADY_ENV; setup was the one place that didn't.
@@ -185,18 +203,30 @@ STACK="${MEM0_BRADY_STACK:-$(env_get MEM0_BRADY_STACK "$ENV_FILE")}"
 if [ -z "$STACK" ]; then
   printf "  Which stack backs this install?\n"
   printf "    managed  — this plugin runs Qdrant + the MCP server under launchd (no Docker)\n"
-  printf "    external — you already run Qdrant + the MCP server yourself\n"
-  STACK="$(ask "stack (managed/external)" "managed")"
+  printf "    compose  — this plugin runs Qdrant + the MCP server in Docker (built from ../stack)\n"
+  printf "    external — somebody else runs the MCP server; this host only talks to it\n"
+  STACK="$(ask "stack (managed/compose/external)" "managed")"
 fi
 case "$STACK" in
-  managed|external) say "stack: ${STACK}" ;;
-  *) die "MEM0_BRADY_STACK must be 'managed' or 'external' (got '${STACK}')" ;;
+  managed|compose|external) say "stack: ${STACK}" ;;
+  *) die "MEM0_BRADY_STACK must be 'managed', 'compose' or 'external' (got '${STACK}')" ;;
 esac
 
-# An external stack talks MCP, which is what makes the rest of this section
-# unnecessary there: the server already holds every value it would ask for.
+# Both compose and external drive mem0 over MCP, so the hooks never import mem0
+# and this host needs no in-process store config. They differ only in who starts
+# the server — which is COMPOSE_MODE.
+#
+# A case, not `[ x ] || [ y ] && z`: under `set -e` the middle term of an
+# ||/&& chain is not exempt from the errexit rule, so the managed path (both
+# tests false) would abort setup here.
 MCP_MODE=0
-[ "$STACK" = "external" ] && MCP_MODE=1
+COMPOSE_MODE=0
+case "$STACK" in
+  external) MCP_MODE=1 ;;
+  # compose owns the stack, so it DOES need the values external delegates to
+  # somebody else's server: storage path, host ports, identity, key.
+  compose)  MCP_MODE=1; COMPOSE_MODE=1 ;;
+esac
 
 QDRANT_HTTP_PORT="$(env_get MEM0_BRADY_QDRANT_HTTP_PORT "$ENV_FILE")"
 QDRANT_HTTP_PORT="${QDRANT_HTTP_PORT:-$DEFAULT_QDRANT_HTTP_PORT}"
@@ -218,7 +248,35 @@ fi
 MCP_URL="${MEM0_BRADY_MCP_URL:-$(env_get MEM0_BRADY_MCP_URL "$ENV_FILE")}"
 [ -n "$MCP_URL" ] || MCP_URL="$(ask "mem0 MCP URL (what clients connect to)" "$DEF_MCP_URL")"
 
-if [ "$MCP_MODE" = "1" ]; then
+if [ "$COMPOSE_MODE" = "1" ]; then
+  # This install RUNS the server, so it owns every value external delegates.
+  # All of it lands in the one config file that compose and the hooks share.
+  COMPOSE_STORAGE="${MEM0_BRADY_QDRANT_STORAGE:-$(env_get MEM0_BRADY_QDRANT_STORAGE "$ENV_FILE")}"
+  [ -n "$COMPOSE_STORAGE" ] || COMPOSE_STORAGE="$(ask "Qdrant storage dir on the host (absolute)" "${DATA_DIR}/qdrant-storage")"
+  case "$COMPOSE_STORAGE" in
+    /*) ;;
+    *) die "MEM0_BRADY_QDRANT_STORAGE must be absolute (got '${COMPOSE_STORAGE}') — compose resolves it relative to stack/, not to you" ;;
+  esac
+  QDRANT_HOST_PORT="$(env_get MEM0_BRADY_QDRANT_HOST_PORT "$ENV_FILE")"
+  QDRANT_HOST_PORT="${QDRANT_HOST_PORT:-6333}"
+  MCP_HOST_PORT="$(env_get MEM0_BRADY_MCP_HOST_PORT "$ENV_FILE")"
+  MCP_HOST_PORT="${MCP_HOST_PORT:-8081}"
+  COLLECTION="${MEM0_BRADY_COLLECTION:-$(env_get MEM0_COLLECTION "$ENV_FILE")}"
+  [ -n "$COLLECTION" ] || COLLECTION="$(ask "Qdrant collection" "$DEFAULT_COLLECTION")"
+  USER_ID="${MEM0_BRADY_USER_ID:-$(env_get MEM0_USER_ID "$ENV_FILE")}"
+  [ -n "$USER_ID" ] || USER_ID="$(ask "shared user_id (the namespace every actor reads)" "$DEFAULT_USER_ID")"
+  # Append-only on re-runs (not in the rewrite list below), so a hand-tuned
+  # model survives an upgrade instead of being reset to the default.
+  LLM_MODEL="$(env_get MEM0_LLM_MODEL "$ENV_FILE")"
+  LLM_MODEL="${LLM_MODEL:-$DEFAULT_LLM_MODEL}"
+  # Container names are <project>-<service>-1; only needed to print an accurate
+  # `docker logs` hint when the server fails to come up.
+  COMPOSE_PROJECT="$(env_get MEM0_BRADY_COMPOSE_PROJECT "$ENV_FILE")"
+  COMPOSE_PROJECT="${COMPOSE_PROJECT:-mem0-host}"
+  say "identity: collection=${COLLECTION} user_id=${USER_ID}"
+  say "stack: storage=${COMPOSE_STORAGE} qdrant=:${QDRANT_HOST_PORT} mcp=:${MCP_HOST_PORT}"
+  say "llm=${LLM_MODEL}  mcp=${MCP_URL}"
+elif [ "$MCP_MODE" = "1" ]; then
   say "mcp=${MCP_URL}"
   say "store identity, embeddings and API key: owned by the server, not configured here"
 else
@@ -235,10 +293,12 @@ else
 fi
 
 # --- Guard: don't silently strand a managed store ----------------------------
-# Switching an install that already has managed-stack memories over to an
-# external store leaves those vectors behind with no pointer to them. Refuse,
-# and name the way out. MEM0_BRADY_ALLOW_STRANDED=1 is the deliberate override.
-if [ "$STACK" = "external" ] && [ "${MEM0_BRADY_ALLOW_STRANDED:-0}" != "1" ]; then
+# Switching an install that already has managed-stack memories over to a store
+# this plugin no longer reads leaves those vectors behind with no pointer to
+# them. True for BOTH non-managed stacks: compose gets its own Qdrant on its own
+# storage path, so the managed vectors are just as orphaned as with external.
+# Refuse, and name the way out. MEM0_BRADY_ALLOW_STRANDED=1 is the override.
+if [ "$STACK" != "managed" ] && [ "${MEM0_BRADY_ALLOW_STRANDED:-0}" != "1" ]; then
   stranded=""
   if [ -d "$QDRANT_STORAGE" ] && find "$QDRANT_STORAGE" -mindepth 1 -maxdepth 1 2>/dev/null | grep -q .; then
     stranded="storage dir ${QDRANT_STORAGE} is non-empty"
@@ -341,13 +401,20 @@ if [ "$STACK" = "managed" ]; then
   fi
 else
   step "Native Qdrant server"
-  say "skipped — external stack (you run Qdrant yourself)"
+  # Both non-managed stacks skip the NATIVE binary, for different reasons worth
+  # distinguishing in the output: compose runs Qdrant as a container it owns,
+  # external never reaches Qdrant at all.
+  if [ "$COMPOSE_MODE" = "1" ]; then
+    say "skipped — compose stack (Qdrant runs as a container, started below)"
+  else
+    say "skipped — external stack (somebody else runs Qdrant)"
+  fi
 fi
 
 # --- OpenAI key --------------------------------------------------------------
 step "OpenAI API key"
 OPENAI_KEY=""
-if [ "$MCP_MODE" = "1" ]; then
+if [ "$MCP_MODE" = "1" ] && [ "$COMPOSE_MODE" != "1" ]; then
   say "not needed — the server owns the key (embeddings, extraction, synthesis)"
 else
 EXISTING_KEY="$(env_get OPENAI_API_KEY "$ENV_FILE")"
@@ -370,24 +437,35 @@ fi
 step "Config + data dirs"
 mkdir -p "$CONFIG_DIR" "$LA_DIR"
 [ "$STACK" = "managed" ] && mkdir -p "$QDRANT_STORAGE"
+# Compose binds this path into the Qdrant container. Docker would happily create
+# it as root-owned if absent, so make it first, as the user.
+[ "$COMPOSE_MODE" = "1" ] && mkdir -p "$COMPOSE_STORAGE"
 
 RENDERED="$(mktmp)"
 trap 'rm -f "$RENDERED"' EXIT
 # MCP mode has its own, deliberately tiny template: every value the managed one
 # carries is owned by the server, and a stale duplicate here would fail by
 # quietly reading a different store.
-if [ "$MCP_MODE" = "1" ]; then
+if [ "$COMPOSE_MODE" = "1" ]; then
+  # The one file that is the whole configuration: compose's half and the hooks'
+  # half together, because this install owns both.
+  TEMPLATE="${TEMPLATES}/env.compose.template"
+elif [ "$MCP_MODE" = "1" ]; then
   TEMPLATE="${TEMPLATES}/env.external.template"
 else
   TEMPLATE="${TEMPLATES}/env.template"
 fi
-# Unset in MCP mode — the external template has no placeholders for them, but
-# the awk call below still expands the variables, and `set -u` would abort.
+# Default the placeholders no chosen template defines — awk expands every
+# variable below regardless of template, and `set -u` would abort on an unset.
 COLLECTION="${COLLECTION:-}"; USER_ID="${USER_ID:-}"
 QDRANT_URL="${QDRANT_URL:-}"; MCP_PORT="${MCP_PORT:-}"
+COMPOSE_STORAGE="${COMPOSE_STORAGE:-}"; LLM_MODEL="${LLM_MODEL:-}"
+QDRANT_HOST_PORT="${QDRANT_HOST_PORT:-}"; MCP_HOST_PORT="${MCP_HOST_PORT:-}"
 KEY="$OPENAI_KEY" STACK_V="$STACK" COLLECTION_V="$COLLECTION" USER_ID_V="$USER_ID" \
 QDRANT_URL_V="$QDRANT_URL" MCP_URL_V="$MCP_URL" MCP_PORT_V="$MCP_PORT" \
 QHTTP_V="$QDRANT_HTTP_PORT" QGRPC_V="$QDRANT_GRPC_PORT" \
+QSTORAGE_V="$COMPOSE_STORAGE" QHOST_V="$QDRANT_HOST_PORT" \
+MCPHOST_V="$MCP_HOST_PORT" LLM_MODEL_V="$LLM_MODEL" \
 awk '{
   gsub(/__OPENAI_API_KEY__/,     ENVIRON["KEY"]);
   gsub(/__STACK__/,              ENVIRON["STACK_V"]);
@@ -398,6 +476,10 @@ awk '{
   gsub(/__MCP_PORT__/,           ENVIRON["MCP_PORT_V"]);
   gsub(/__QDRANT_HTTP_PORT__/,   ENVIRON["QHTTP_V"]);
   gsub(/__QDRANT_GRPC_PORT__/,   ENVIRON["QGRPC_V"]);
+  gsub(/__QDRANT_STORAGE__/,     ENVIRON["QSTORAGE_V"]);
+  gsub(/__QDRANT_HOST_PORT__/,   ENVIRON["QHOST_V"]);
+  gsub(/__MCP_HOST_PORT__/,      ENVIRON["MCPHOST_V"]);
+  gsub(/__LLM_MODEL__/,          ENVIRON["LLM_MODEL_V"]);
   print
 }' "$TEMPLATE" > "$RENDERED"
 
@@ -413,9 +495,14 @@ if [ -f "$ENV_FILE" ]; then
   # Only keys the CHOSEN template defines are rewritten, so switching a managed
   # install to external leaves its old identity keys in place, inert, rather
   # than deleting values you may still want if you switch back.
+  # Deliberately NOT here: MEM0_LLM_MODEL, MEM0_EMBED_*, MEM0_CUSTOM_INSTRUCTIONS
+  # and the capture/scope keys. Those are tuning, not identity — setup never
+  # resolves them, so rewriting would reset a hand-tuned value to the template
+  # default on every upgrade. They are append-only via the loop below.
   for k in MEM0_BRADY_STACK MEM0_COLLECTION MEM0_USER_ID MEM0_QDRANT_URL \
            MEM0_BRADY_MCP_URL MEM0_PORT MEM0_BRADY_QDRANT_HTTP_PORT \
-           MEM0_BRADY_QDRANT_GRPC_PORT OPENAI_API_KEY; do
+           MEM0_BRADY_QDRANT_GRPC_PORT MEM0_BRADY_QDRANT_STORAGE \
+           MEM0_BRADY_QDRANT_HOST_PORT MEM0_BRADY_MCP_HOST_PORT OPENAI_API_KEY; do
     newline="$(grep -E "^${k}=" "$RENDERED" | head -1 || true)"
     [ -n "$newline" ] || continue
     if grep -qE "^${k}=" "$MERGED"; then
@@ -463,9 +550,46 @@ if [ "$STACK" = "managed" ]; then
     "${TEMPLATES}/com.mem0brady.server.plist.template" > "$SERVER_PLIST"
   say "wrote ${SERVER_PLIST}"
   load_agent "$SERVER_LABEL" "$SERVER_PLIST"
+elif [ "$COMPOSE_MODE" = "1" ]; then
+  # Build and run the vendored stack. The image is built from ../stack with the
+  # plugin root as context, so it packages the SAME ../server tree that the uv
+  # tool install above put on this host — the hooks and the server cannot be
+  # different code. --build is unconditional for that reason: skipping it is how
+  # an edited fork ends up running yesterday's image.
+  step "Compose stack"
+  command -v docker >/dev/null 2>&1 || die "docker not found — a compose stack needs it (or re-run and choose 'managed')"
+  docker info >/dev/null 2>&1 || die "docker is installed but not running — start it, then re-run"
+  [ -f "${STACK_DIR}/docker-compose.yml" ] || die "vendored stack not found at ${STACK_DIR}"
+  printf "  building + starting from %s ...\n" "$STACK_DIR"
+  # Both flags point at the SAME file, deliberately: --env-file feeds compose's
+  # own interpolation (storage path, host ports, project name) and `env_file:`
+  # inside the compose file injects the server's config into the container.
+  # MEM0_BRADY_CONFIG_ENV makes the latter resolve to this install's config
+  # rather than the literal $HOME default.
+  if ! MEM0_BRADY_CONFIG_ENV="$ENV_FILE" \
+       docker compose --project-directory "$STACK_DIR" \
+         -f "${STACK_DIR}/docker-compose.yml" --env-file "$ENV_FILE" \
+         up -d --build >/dev/null 2>&1; then
+    printf "  ${RED}FAIL${NC} compose failed to build or start the stack.\n" >&2
+    printf "        Re-run by hand to see why:\n" >&2
+    printf "          ${BLUE}MEM0_BRADY_CONFIG_ENV=%s docker compose --project-directory %s --env-file %s up -d --build${NC}\n" \
+      "$ENV_FILE" "$STACK_DIR" "$ENV_FILE" >&2
+    exit 1
+  fi
+  say "stack built and started"
+  wait_for "http://127.0.0.1:${QDRANT_HOST_PORT}/readyz" "Qdrant" 30
+  # The MCP endpoint answers 406 to a bare GET (it wants a POST with an SSE
+  # Accept header), which is still proof the server is up — http_code != 000.
+  tries=0
+  until [ "$(http_code "$MCP_URL")" != "000" ]; do
+    tries=$((tries + 1))
+    [ "$tries" -ge 30 ] && die "mem0 MCP server never came up at ${MCP_URL} — check: docker logs ${COMPOSE_PROJECT}-mem0-mcp-1"
+    sleep 1
+  done
+  say "mem0 MCP server reachable at ${MCP_URL}"
 else
   step "launchd agents"
-  say "skipped — external stack (you run the MCP server yourself)"
+  say "skipped — external stack (somebody else runs the MCP server)"
   # The hooks reach mem0 only through the server now, so the server — not
   # Qdrant — is what has to answer from this shell.
   if [ "$(http_code "$MCP_URL")" = "000" ]; then
@@ -590,7 +714,14 @@ printf "\n${GREEN}${BOLD}mem0-brady is set up.${NC}\n"
 printf "  • Stack:         %s\n" "$STACK"
 printf "  • Config:        %s\n" "$ENV_FILE"
 printf "  • MCP server:    %s\n" "$MCP_URL"
-if [ "$MCP_MODE" = "1" ]; then
+if [ "$COMPOSE_MODE" = "1" ]; then
+  # This install owns the store, so — unlike external — it can name it.
+  printf "  • Qdrant:        127.0.0.1:%s (container), data in %s\n" "$QDRANT_HOST_PORT" "$COMPOSE_STORAGE"
+  printf "  • Store:         collection %s, user_id %s\n" "$COLLECTION" "$USER_ID"
+  printf "  • Extraction:    %s\n" "$LLM_MODEL"
+  printf "  • Install:       MCP client on the host; mem0 itself runs in the container\n"
+  printf "  • Stack:         built from %s (same source as the host hooks)\n" "$STACK_DIR"
+elif [ "$MCP_MODE" = "1" ]; then
   # QDRANT_URL / COLLECTION / USER_ID are never set in this mode — the server
   # owns them, and under `set -u` printing them would abort the run.
   printf "  • Qdrant:        via the server (not contacted from this host)\n"

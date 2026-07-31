@@ -18,8 +18,16 @@
 #   - the native qdrant binary
 #   - both launchd agents loaded (com.mem0brady.qdrant, com.mem0brady.server)
 #   - the Qdrant storage dir is present + writable
-# Under MEM0_BRADY_STACK=external those three are skipped — you run Qdrant and
-# the MCP server yourself, so the plugin owns no binary, agent, or storage dir.
+# Under MEM0_BRADY_STACK=external those three are skipped — somebody else runs
+# Qdrant and the MCP server, so the plugin owns no binary, agent, or storage dir.
+#
+# Compose stack only (MEM0_BRADY_STACK=compose):
+#   - docker is running and both containers are up
+#   - the Qdrant storage dir is present + writable
+#   - the RUNNING container's config still matches the config file. A container
+#     keeps serving whatever it was started with, so an edited .env and a stale
+#     container are indistinguishable from the outside — this is the one check
+#     that catches it.
 #
 # Exits 0 if all required checks pass, 1 otherwise. Optional checks warn but
 # never fail the run.
@@ -67,7 +75,14 @@ USER_ID="$(env_get MEM0_USER_ID)"
 # no store identity and no mem0 install. Checking for them would report a
 # healthy install as broken.
 MCP_MODE=0
-[ "$STACK" = "external" ] && MCP_MODE=1
+COMPOSE_MODE=0
+case "$STACK" in
+  external) MCP_MODE=1 ;;
+  # compose also drives mem0 through the server, so the same host-side checks
+  # are skipped — but this plugin OWNS that server, so its health is checkable
+  # here in a way an external one is not.
+  compose)  MCP_MODE=1; COMPOSE_MODE=1 ;;
+esac
 
 print_header() { printf "\n${BOLD}%s${NC}\n" "$1"; printf '%s\n' "------------------------------------------------------------"; }
 pass() { printf "  ${GREEN}OK${NC}      %s\n" "$1"; }
@@ -130,8 +145,16 @@ if [ "$MCP_MODE" = "1" ]; then
       # failure this pairing exists to catch: hooks and the write guard enforce
       # the host's copy while writes land under the server's.
       if [ -n "$USER_ID" ] && ! printf '%s' "$SERVER_ENT" | jq -e --arg u "$USER_ID" '[.users[]?.value] | index($u)' >/dev/null 2>&1; then
-        fail_required "host pins MEM0_USER_ID=${USER_ID}, which the server does not hold" \
-          "Remove MEM0_USER_ID from ${ENV_FILE} — under an external stack the server owns the namespace, and a host copy that disagrees is enforced against writes that land elsewhere."
+        if [ "$COMPOSE_MODE" = "1" ]; then
+          # Under compose the host copy is not a duplicate to delete — it is the
+          # SAME line the container was started from. Disagreement therefore
+          # means the container predates the config, not that the host is wrong.
+          fail_required "host pins MEM0_USER_ID=${USER_ID}, which the server does not hold" \
+            "The running container is stale relative to ${ENV_FILE} — restart it: docker compose --env-file ${ENV_FILE} up -d"
+        else
+          fail_required "host pins MEM0_USER_ID=${USER_ID}, which the server does not hold" \
+            "Remove MEM0_USER_ID from ${ENV_FILE} — under an external stack the server owns the namespace, and a host copy that disagrees is enforced against writes that land elsewhere."
+        fi
       elif [ -n "$USER_ID" ]; then
         pass "host MEM0_USER_ID=${USER_ID} matches the server"
       fi
@@ -213,8 +236,10 @@ print_header "launchd agents (required)"
 if [ "$STACK" = "managed" ]; then
   agent_loaded "$QDRANT_LABEL" && pass "${QDRANT_LABEL} is loaded" || fail_required "${QDRANT_LABEL} not loaded" "Run /mem0-brady:setup."
   agent_loaded "$SERVER_LABEL" && pass "${SERVER_LABEL} is loaded" || fail_required "${SERVER_LABEL} not loaded" "Run /mem0-brady:setup."
+elif [ "$COMPOSE_MODE" = "1" ]; then
+  pass "no launchd agents (compose stack — the containers are the supervisor)"
 else
-  pass "no launchd agents (external stack — you run Qdrant + the MCP server)"
+  pass "no launchd agents (external stack — somebody else runs Qdrant + the MCP server)"
   # A leftover managed agent still bound to its port is invisible here but will
   # quietly serve a DIFFERENT store than the one this config points at.
   for lbl in "$QDRANT_LABEL" "$SERVER_LABEL"; do
@@ -274,10 +299,59 @@ else
   fi
 fi
 
+# --- Compose stack -----------------------------------------------------------
+# Only meaningful when the plugin owns the containers. The point of these checks
+# is drift: a container keeps running happily against the config it was STARTED
+# with, so an edited .env and a stale container look identical from the outside.
+if [ "$COMPOSE_MODE" = "1" ]; then
+  print_header "Compose stack (required)"
+  if ! command -v docker >/dev/null 2>&1; then
+    fail_required "docker not found, but MEM0_BRADY_STACK=compose" "Install Docker, or re-run /mem0-brady:setup and choose another stack."
+  elif ! docker info >/dev/null 2>&1; then
+    fail_required "docker is installed but not running" "Start Docker, then re-run."
+  else
+    pass "docker running"
+    PROJECT="$(env_get MEM0_BRADY_COMPOSE_PROJECT)"; PROJECT="${PROJECT:-mem0-host}"
+    for svc in qdrant mem0-mcp; do
+      cid="$(docker ps -q -f "name=^${PROJECT}-${svc}-1$" 2>/dev/null || true)"
+      if [ -n "$cid" ]; then
+        pass "${PROJECT}-${svc}-1 running"
+      else
+        fail_required "${PROJECT}-${svc}-1 not running" \
+          "Start it: docker compose --env-file ${ENV_FILE} up -d"
+      fi
+    done
+    # The drift check proper: compare the model the container was started with
+    # against the one the config now says. They diverge the moment you edit the
+    # config without restarting, and every write silently uses the old value.
+    live_model="$(docker exec "${PROJECT}-mem0-mcp-1" printenv MEM0_LLM_MODEL 2>/dev/null || true)"
+    cfg_model="$(env_get MEM0_LLM_MODEL)"
+    if [ -n "$live_model" ] && [ -n "$cfg_model" ]; then
+      if [ "$live_model" = "$cfg_model" ]; then
+        pass "container config matches ${ENV_FILE} (MEM0_LLM_MODEL=${live_model})"
+      else
+        fail_required "container is running MEM0_LLM_MODEL=${live_model} but the config says ${cfg_model}" \
+          "The container predates your edit — restart it: docker compose --env-file ${ENV_FILE} up -d"
+      fi
+    fi
+  fi
+fi
+
 # --- Qdrant storage ----------------------------------------------------------
 print_header "Qdrant storage (required)"
-if [ "$STACK" != "managed" ]; then
-  pass "storage is owned by your external stack, not the plugin"
+if [ "$COMPOSE_MODE" = "1" ]; then
+  CSTORAGE="$(env_get MEM0_BRADY_QDRANT_STORAGE)"
+  if [ -z "$CSTORAGE" ]; then
+    fail_required "no MEM0_BRADY_QDRANT_STORAGE in ${ENV_FILE}" "compose cannot start without it — run /mem0-brady:setup."
+  elif [ -d "$CSTORAGE" ] && [ -w "$CSTORAGE" ]; then
+    pass "storage dir present + writable: ${CSTORAGE}"
+  elif [ -d "$CSTORAGE" ]; then
+    fail_required "storage dir not writable: ${CSTORAGE}" "chmod u+w ${CSTORAGE}"
+  else
+    fail_required "storage dir missing: ${CSTORAGE}" "Create it, or run /mem0-brady:setup."
+  fi
+elif [ "$STACK" != "managed" ]; then
+  pass "storage is owned by an external stack, not the plugin"
 elif [ -d "$QDRANT_STORAGE" ]; then
   if [ -w "$QDRANT_STORAGE" ]; then pass "storage dir present + writable: ${QDRANT_STORAGE}"; else fail_required "storage dir not writable: ${QDRANT_STORAGE}" "chmod u+w ${QDRANT_STORAGE}"; fi
 else

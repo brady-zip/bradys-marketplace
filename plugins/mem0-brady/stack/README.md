@@ -1,6 +1,6 @@
-# stack — the external Docker stack
+# stack — the Docker stack
 
-Qdrant + the mem0 MCP server, in Docker, for the `external` stack mode. Lives here
+Qdrant + the mem0 MCP server, in Docker, for the `compose` stack mode. Lives here
 rather than in a loose directory so the server image builds from the **vendored
 fork at `../server`** — the same source the plugin installs the recall/capture
 hooks from.
@@ -15,8 +15,34 @@ one source of truth, by construction.
 ## Run it
 
 ```bash
-cp .env.example .env      # fill in OPENAI_API_KEY and MEM0_BRADY_QDRANT_STORAGE
-docker compose up -d --build
+MEM0_BRADY_STACK=compose /mem0-brady:setup
+```
+
+That is the whole procedure. Setup renders `~/.config/mem0-brady/.env`, installs
+the vendored server as a host tool for the hooks, then builds and starts this
+stack from that same config.
+
+### There is deliberately no `.env` beside this file
+
+Config lives **only** in `~/.config/mem0-brady/.env` — the same file the hooks
+`source`. Compose reads it twice: `--env-file` for its own interpolation (the
+storage path, the host ports, the project name) and `env_file:` to inject the
+server's half into the container.
+
+That is not tidiness. A second copy in the source tree is how a live
+`OPENAI_API_KEY` ends up committed-adjacent in a checkout, and how an edit lands
+on the copy nothing reads — a failure that looks exactly like the edit not
+working. One file cannot drift from itself.
+
+**Quoting is load-bearing**, because two parsers read that one file and they
+disagree about bare values. Compose accepts `K=two words`; `source` runs `words`
+as a command and leaves `K` empty. Quote anything containing a space, `;`, `*`,
+`{` or `#`. Quoted values come back byte-identical from both.
+
+To drive it by hand instead of through setup:
+
+```bash
+docker compose --env-file ~/.config/mem0-brady/.env up -d --build
 docker compose logs -f mem0-mcp          # confirm it binds :8081
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8081/mcp   # 406 = alive
 ```
@@ -24,11 +50,18 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8081/mcp   # 406 = ali
 `406` is success here: streamable-HTTP rejects a plain GET (it wants
 `Accept: text/event-stream`), so any HTTP response proves the server is up.
 
-Then point the plugin at it:
+### Restart after editing the config
 
-```bash
-MEM0_BRADY_STACK=external /mem0-brady:setup
-```
+A container keeps serving whatever it was started with. Editing the config
+without `up -d` leaves a stale container that looks perfectly healthy while
+using the old values — `/mem0-brady:doctor` compares the two and flags it.
+
+## compose vs external
+
+`compose` means *this plugin runs the server*. `external` means *somebody else
+does* — a tunnelled server, or a cloud container booting from a shared config —
+and the plugin then owns no containers, no storage, and no key. Both drive mem0
+over MCP; only `compose` builds and starts anything.
 
 ## Qdrant does not need publishing
 
