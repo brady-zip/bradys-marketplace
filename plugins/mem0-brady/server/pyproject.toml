@@ -16,7 +16,13 @@ authors = [
 # MCP client. Installing the SERVER (or hooks that drive mem0 in-process) needs
 # the `direct` extra below.
 dependencies = [
-    "mcp[cli]>=1.23.0",
+    # Pinned below 2.x for the same reason as mem0ai: `uv tool install`
+    # re-resolves from these constraints and ignores uv.lock, so an unbounded
+    # spec silently upgrades on every rebuild. mcp 2.0.0 renamed the
+    # `mcp.server.fastmcp` module that server.py imports, so an unpinned build
+    # produces an image that crash-loops on startup. Lifting the bound means
+    # porting server.py to the 2.x API, not just widening this line.
+    "mcp[cli]>=1.23.0,<2",
     "python-dotenv>=1.2.1",
 ]
 
