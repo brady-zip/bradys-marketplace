@@ -82,6 +82,21 @@ def build_config() -> tuple[dict[str, Any], list[ProviderInfo], dict[str, Any] |
         openai_key = opt_env("OPENAI_API_KEY")
         if openai_key:
             llm_config["api_key"] = openai_key
+        # Reasoning models reject temperature/max_tokens/top_p. mem0ai classifies
+        # them by NAME and deliberately excludes the gpt-5.x family, because most
+        # of it does accept temperature — but not all of it does (gpt-5.6-luna
+        # allows only the default 1). mem0 sends temperature=0.1 unconditionally,
+        # so on such a model every extraction 400s and infer=true writes nothing.
+        # Upstream's escape hatch is an explicit is_reasoning_model on the config;
+        # expose it rather than patching the heuristic. Tri-state on purpose:
+        # unset keeps mem0's name-based detection, so existing configs are unchanged.
+        is_reasoning = opt_env("MEM0_LLM_IS_REASONING_MODEL")
+        if is_reasoning:
+            llm_config["is_reasoning_model"] = is_reasoning.lower() in ("true", "1", "yes")
+        # Reasoning models drop max_tokens too, so effort is the only quality lever.
+        reasoning_effort = opt_env("MEM0_LLM_REASONING_EFFORT")
+        if reasoning_effort:
+            llm_config["reasoning_effort"] = reasoning_effort
 
     # --- Embedder ---
     # Provider-aware defaults: model + dimensionality differ per provider, and the
