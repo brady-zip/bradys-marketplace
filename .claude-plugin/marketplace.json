@@ -39,6 +39,17 @@
       },
       "source": "./plugins/dark-factory",
       "category": "development"
+    },
+    {
+      "name": "design-ops",
+      "description": "Design ops commands for the UX team — /design-ops:ux-ticket-pr-completion-table generates the quarterly UX Quality ticket completion table from Linear, cross-checked against merged GitHub PRs.",
+      "version": "260804.0",
+      "author": {
+        "name": "Brady Watkinson",
+        "email": "brady@local"
+      },
+      "source": "./plugins/design-ops",
+      "category": "productivity"
     }
   ]
 }

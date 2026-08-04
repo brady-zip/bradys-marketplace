@@ -1,0 +1,9 @@
+{
+  "author": {
+    "name": "Brady Watkinson",
+    "email": "brady@local"
+  },
+  "description": "Design ops commands for the UX team — /design-ops:ux-ticket-pr-completion-table generates the quarterly UX Quality ticket completion table from Linear, cross-checked against merged GitHub PRs.",
+  "name": "design-ops",
+  "version": "260804.0"
+}
