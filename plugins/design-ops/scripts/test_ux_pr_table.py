@@ -116,6 +116,96 @@ def test_date_rule_done_vs_merged():
     assert m.keep_issue(merged_in, start, end)
 
 
+def test_resolve_designer_by_id_and_name():
+    assert m.resolve_designer({"id": JENNY_ID, "name": "whatever"})[0] == "Jenny Liu"
+    assert m.resolve_designer({"id": None, "name": "Jenny Liu"})[1] == JENNY_GH
+    assert m.resolve_designer({"name": "Joyce Liu"})[0] == "Joyce Liu"  # not Jenny
+    assert m.resolve_designer({"name": "Some Engineer"}) is None
+    assert m.resolve_designer(None) is None
+
+
+def test_resolve_designer_alias_and_casing():
+    """Linear's display name for Jing Jian is "JingZhi Jian" -- id-less feeds need the alias."""
+    assert m.resolve_designer({"name": "JingZhi Jian"})[0] == "Jing Jian"
+    assert m.resolve_designer({"name": "jenny liu"})[0] == "Jenny Liu"
+    for alias, key in m.LINEAR_NAME_ALIASES.items():
+        assert key in m.DESIGNERS, f"alias {alias!r} points at unknown roster key {key!r}"
+
+
+def test_normalize_api_shape():
+    got = m.normalize_issue({
+        "identifier": "UX-1", "title": "t", "url": "u",
+        "completedAt": "2026-06-01T00:00:00.000Z", "updatedAt": "2026-06-02T00:00:00.000Z",
+        "state": {"name": "Done", "type": "completed"},
+        "assignee": {"id": JENNY_ID, "name": "Jenny Liu"},
+        "attachments": {"nodes": [{"url": "https://github.com/x/y/pull/1"}]},
+    })
+    assert got["state"] == {"name": "Done", "type": "completed"}
+    assert got["assignee"]["id"] == JENNY_ID
+    assert got["attachment_urls"] == ["https://github.com/x/y/pull/1"]
+
+
+def test_normalize_mcp_shape_with_bare_fields():
+    """An MCP dump may give a bare state name, a bare assignee name, bare URLs."""
+    got = m.normalize_issue({
+        "identifier": "UX-2", "title": "t", "url": "u",
+        "updatedAt": "2026-06-02T00:00:00.000Z",
+        "state": "Merged",
+        "assignee": "Jenny Liu",
+        "links": ["https://github.com/x/y/pull/2"],
+    })
+    assert got["state"] == {"name": "Merged", "type": "started"}  # Merged is not completed
+    assert got["assignee"] == {"id": None, "name": "Jenny Liu"}
+    assert got["attachment_urls"] == ["https://github.com/x/y/pull/2"]
+    assert m.resolve_designer(got["assignee"])[0] == "Jenny Liu"
+
+
+def test_normalize_infers_completed_for_non_merged_state_names():
+    assert m.normalize_issue({"state": "Done"})["state"]["type"] == "completed"
+    assert m.normalize_issue({"state": "merged"})["state"]["type"] == "started"
+    assert m.normalize_issue({"state": "Done", "stateType": "completed"})["state"]["type"] == "completed"
+
+
+def test_normalize_tolerates_missing_fields():
+    got = m.normalize_issue({})
+    assert got["identifier"] == "?" and got["assignee"] is None and got["attachment_urls"] == []
+
+
+def test_load_issues_file_accepts_array_and_wrapper(tmp=None):
+    import json as _json
+    import tempfile
+    payloads = [
+        [{"identifier": "UX-1", "state": "Done", "assignee": "Jenny Liu"}],
+        {"issues": [{"identifier": "UX-1", "state": "Done", "assignee": "Jenny Liu"}]},
+        {"nodes": [{"identifier": "UX-1", "state": "Done", "assignee": "Jenny Liu"}]},
+    ]
+    for payload in payloads:
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
+            _json.dump(payload, fh)
+            path = fh.name
+        got = m.load_issues_file(path)
+        assert len(got) == 1 and got[0]["identifier"] == "UX-1", payload
+
+
+def test_mcp_sourced_issue_attributes_end_to_end():
+    """A ticket that arrived via --issues-file credits the same as an API one."""
+    issue = m.normalize_issue({
+        "identifier": "UX-9", "title": "t", "url": "u", "state": "Done",
+        "completedAt": "2026-06-01T00:00:00.000Z",
+        "assignee": "Jenny Liu",
+        "attachments": [{"url": f"https://github.com/{m.REPO}/pull/7"}],
+    })
+    issue["pr_numbers"] = [7]
+    got = m.attribute([issue], {7: pr(7, "z-star-agent", [JENNY_GH])})
+    assert got["Jenny Liu"][0]["prs"][0]["via"] == "z-star"
+
+
+def test_attribute_skips_non_roster_assignees():
+    issue = m.normalize_issue({"identifier": "X-1", "state": "Done", "assignee": "Some Engineer"})
+    issue["pr_numbers"] = [1]
+    assert all(not v for v in m.attribute([issue], {1: pr(1, "some-engineer")}).values())
+
+
 def test_pr_url_matching():
     assert m.PR_URL_RE.match("https://github.com/Greenbax/evergreen/pull/123").group(2) == "123"
     assert not m.PR_URL_RE.match("https://github.com/Greenbax/evergreen/issues/123")
