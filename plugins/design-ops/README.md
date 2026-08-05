@@ -14,8 +14,19 @@ Design ops commands for the UX team.
   the Claude desktop chat app below.
 - **`python3`** — 3.9+, standard library only. Nothing to `pip install`.
 - **`gh` authenticated** to an account with read access to `Greenbax/evergreen`: `gh auth status`.
-- **`LINEAR_API_KEY`** in the environment, for a Linear account that can read the `ziphq` workspace.
-  Create one at Linear → Settings → Security & access → Personal API keys.
+  Required either way — GitHub is always read through `gh`.
+- **Linear access, by one of two routes** (the command probes and picks automatically):
+  - **`LINEAR_API_KEY`** in the environment, for an account that can read the `ziphq` workspace.
+    Create one at Linear → Settings → Security & access → Personal API keys. Fastest, and the only
+    route that works when running the script standalone.
+  - **A Linear MCP server connected to Claude Code** — the claude.ai connector, a plugin-provided
+    one, or a directly-configured server all work. No API key needed: the command fetches the
+    tickets through the MCP and feeds them to the script, which still does the attribution. Check
+    which route is live with:
+
+    ```bash
+    python3 scripts/ux_pr_table.py --probe   # prints "api" or "mcp" plus the reason
+    ```
 
 ## Install — Claude Code CLI
 
@@ -110,15 +121,22 @@ claude plugin uninstall design-ops                    # remove entirely
 ## Scripts
 
 `scripts/ux_pr_table.py` does the deterministic work behind the command, so it is also usable on its
-own — no Claude Code required. Stdlib-only Python; needs `LINEAR_API_KEY` in the environment and an
-authenticated `gh`.
+own — no Claude Code required. Stdlib-only Python; needs an authenticated `gh`, plus either
+`LINEAR_API_KEY` or an `--issues-file`.
 
 ```bash
 python3 scripts/ux_pr_table.py                    # current Zip fiscal quarter
 python3 scripts/ux_pr_table.py 2026-05-01..today  # explicit window
 python3 scripts/ux_pr_table.py --json --no-sweep  # machine-readable, skip the gap sweep
+python3 scripts/ux_pr_table.py --probe            # which Linear source is usable
 python3 scripts/test_ux_pr_table.py               # self-checks (no pytest needed)
+
+# Linear issues fetched elsewhere (what the MCP route does under the hood):
+python3 scripts/ux_pr_table.py --issues-file ux_issues.json
 ```
+
+`--issues-file` takes a JSON list of issues with permissively-matched field names — see `--help` for
+the shape. Both routes produce a byte-identical table; only the Linear fetch differs.
 
 The designer roster (Linear user id + GitHub handle) lives in `DESIGNERS` at the top of the script.
 Z\* is matched by the exact login `z-star-agent` / `app/z-star-agent`, never a `z` prefix — several

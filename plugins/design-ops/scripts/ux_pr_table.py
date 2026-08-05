@@ -12,8 +12,22 @@ Usage:
   ux_pr_table.py --since 2026-06-01 --until 2026-07-31
   ux_pr_table.py --json                 # machine-readable instead of markdown
   ux_pr_table.py --no-sweep             # skip the uncounted-PR sweep (faster)
+  ux_pr_table.py --probe                # report which Linear source is usable
+  ux_pr_table.py --issues-file f.json   # take Linear issues from a file (MCP path)
 
-Requires: LINEAR_API_KEY in the environment, and an authenticated `gh`.
+Linear can be reached two ways, and `--probe` reports which is available:
+
+  api  -- LINEAR_API_KEY is set and works; the script fetches issues itself.
+  mcp  -- no usable key. The caller (Claude, or any other driver) fetches issues
+          through the Linear MCP server, writes them to JSON, and passes
+          --issues-file. Field names are normalized permissively, so the shape
+          the MCP happens to return is usually accepted as-is. Minimum per issue:
+          an identifier, a state, an assignee, and the GitHub attachment URLs.
+
+Either way GitHub is read through `gh`, and everything downstream of the Linear
+fetch -- window math, attribution, the sweep, the table -- is identical.
+
+Requires: an authenticated `gh`, plus either LINEAR_API_KEY or --issues-file.
 """
 
 from __future__ import annotations
@@ -60,6 +74,12 @@ DESIGNERS: dict[str, tuple[str, str | None]] = {
     "Ying Wong": ("7a9dccde-6230-4238-8249-12cec27b4b63", "yg-wong"),
     "Yumei Feng": ("7bad4cb2-3af1-48cb-85c3-363a4cec3934", None),
     "Zack Karrasch": ("cee547a3-45bc-410e-9614-9b36e35ee77c", None),
+}
+
+# Linear display names that differ from the roster key above. Only needed for the
+# --issues-file path when the feed carries no Linear user id to match on.
+LINEAR_NAME_ALIASES = {
+    "JingZhi Jian": "Jing Jian",
 }
 
 PR_URL_RE = re.compile(r"https://github\.com/([^/]+/[^/]+)/pull/(\d+)")
@@ -140,6 +160,26 @@ def linear(query: str, variables: dict) -> dict:
     return body["data"]
 
 
+def probe_linear() -> tuple[str, str]:
+    """Which Linear source is usable: ("api"|"mcp", human-readable reason)."""
+    key = os.environ.get("LINEAR_API_KEY")
+    if not key:
+        return "mcp", "LINEAR_API_KEY is not set"
+    req = urllib.request.Request(
+        LINEAR_API,
+        data=json.dumps({"query": "query { viewer { id } }"}).encode(),
+        headers={"Authorization": key, "Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            body = json.load(resp)
+    except Exception as e:  # noqa: BLE001 -- any failure means fall back to MCP
+        return "mcp", f"LINEAR_API_KEY set but unusable ({type(e).__name__}: {e})"
+    if body.get("errors"):
+        return "mcp", f"LINEAR_API_KEY rejected: {json.dumps(body['errors'])[:200]}"
+    return "api", "LINEAR_API_KEY works"
+
+
 def fetch_issues() -> list[dict]:
     """Every Done-or-Merged UX Quality issue assigned to a tracked designer."""
     issue_filter = {
@@ -165,6 +205,114 @@ def keep_issue(issue: dict, start: date, end: date) -> bool:
     if issue["state"]["type"] == "completed":
         return in_window(issue["completedAt"], start, end)
     return in_window(issue["updatedAt"], start, end)
+
+
+# ------------------------------------------------- normalization (any source)
+
+
+def _first(raw: dict, *keys):
+    """First present, non-empty value among several possible field spellings."""
+    for k in keys:
+        v = raw.get(k)
+        if v not in (None, "", [], {}):
+            return v
+    return None
+
+
+def _norm_state(raw: dict) -> dict:
+    """Accept state as {"name","type"}, or a bare name plus an optional type."""
+    state = raw.get("state") or raw.get("status")
+    if isinstance(state, dict):
+        name = _first(state, "name") or ""
+        type_ = _first(state, "type", "stateType") or ""
+    else:
+        name = state or ""
+        type_ = _first(raw, "stateType", "state_type", "statusType") or ""
+    if not type_:
+        # Only Done-or-Merged issues should reach here, and "Merged" is the one
+        # that is not a completed state in Linear -- everything else is.
+        type_ = "started" if name.strip().lower() == MERGED_STATE_NAME.lower() else "completed"
+    return {"name": name, "type": type_}
+
+
+def _norm_assignee(raw: dict) -> dict | None:
+    """Accept assignee as an object, or as a bare display name."""
+    who = _first(raw, "assignee", "assignedTo")
+    if isinstance(who, dict):
+        return {"id": who.get("id"), "name": who.get("name") or who.get("displayName")}
+    if isinstance(who, str):
+        return {"id": None, "name": who}
+    return None
+
+
+def _norm_attachment_urls(raw: dict) -> list[str]:
+    """Accept attachments as {"nodes":[...]}, a list of objects, or bare URLs."""
+    urls: list[str] = []
+    for field in ("attachments", "links", "prUrls", "pullRequests"):
+        value = raw.get(field)
+        if isinstance(value, dict):
+            value = value.get("nodes") or value.get("items") or []
+        for item in value or []:
+            if isinstance(item, str):
+                urls.append(item)
+            elif isinstance(item, dict):
+                url = _first(item, "url", "href", "link")
+                if isinstance(url, str):
+                    urls.append(url)
+    return urls
+
+
+def normalize_issue(raw: dict) -> dict:
+    """One internal issue shape, whether it came from the API or an MCP dump."""
+    return {
+        "identifier": _first(raw, "identifier", "id", "key") or "?",
+        "title": _first(raw, "title", "name") or "",
+        "url": _first(raw, "url", "issueUrl", "link") or "",
+        "completedAt": _first(raw, "completedAt", "completed_at"),
+        "updatedAt": _first(raw, "updatedAt", "updated_at"),
+        "state": _norm_state(raw),
+        "assignee": _norm_assignee(raw),
+        "attachment_urls": _norm_attachment_urls(raw),
+    }
+
+
+def resolve_designer(assignee: dict | None) -> tuple[str, str | None] | None:
+    """Map a Linear assignee to a roster entry, by id when present, else by name.
+
+    Name matching is exact: Jenny Liu and Joyce Liu are different people.
+    """
+    if not assignee:
+        return None
+    by_id = {uid: (name, handle) for name, (uid, handle) in DESIGNERS.items()}
+    if assignee.get("id") and assignee["id"] in by_id:
+        return by_id[assignee["id"]]
+    name = (assignee.get("name") or "").strip()
+    name = LINEAR_NAME_ALIASES.get(name, name)
+    if name in DESIGNERS:
+        return name, DESIGNERS[name][1]
+    folded = {k.casefold(): k for k in DESIGNERS}  # tolerate casing drift only
+    if name.casefold() in folded:
+        key = folded[name.casefold()]
+        return key, DESIGNERS[key][1]
+    return None
+
+
+def load_issues_file(path: str) -> list[dict]:
+    """Issues fetched by someone else (the Linear MCP path)."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except OSError as e:
+        sys.exit(f"cannot read --issues-file {path}: {e}")
+    except json.JSONDecodeError as e:
+        sys.exit(f"--issues-file {path} is not valid JSON: {e}")
+
+    # Accept a bare array, or a wrapper like {"issues": [...]} / {"nodes": [...]}.
+    if isinstance(data, dict):
+        data = _first(data, "issues", "nodes", "results", "data") or []
+    if not isinstance(data, list):
+        sys.exit(f"--issues-file {path} must hold a list of issues")
+    return [normalize_issue(i) for i in data if isinstance(i, dict)]
 
 
 # ---------------------------------------------------------------- github
@@ -243,11 +391,13 @@ def attribute(issues: list[dict], prs: dict[int, dict]) -> dict[str, list[dict]]
     designer is a PR assignee; if a Z* PR has no assignee at all, the Linear
     ticket assignee stands in, flagged so the missing assignment is visible.
     """
-    by_id = {uid: (name, handle) for name, (uid, handle) in DESIGNERS.items()}
     credited: dict[str, list[dict]] = {name: [] for name in DESIGNERS}
 
     for issue in issues:
-        name, handle = by_id[issue["assignee"]["id"]]
+        resolved = resolve_designer(issue.get("assignee"))
+        if not resolved:  # not a tracked designer
+            continue
+        name, handle = resolved
         hits = []
         for number in issue["pr_numbers"]:
             pr = prs.get(number)
@@ -347,17 +497,40 @@ def main() -> None:
     ap.add_argument("--until", help="window end (YYYY-MM-DD or 'today')")
     ap.add_argument("--json", action="store_true", help="emit JSON instead of markdown")
     ap.add_argument("--no-sweep", action="store_true", help="skip the uncounted-PR sweep")
+    ap.add_argument("--issues-file", help="JSON file of Linear issues (the MCP path)")
+    ap.add_argument("--probe", action="store_true",
+                    help="print which Linear source is usable ('api' or 'mcp') and exit")
     args = ap.parse_args()
+
+    if args.probe:
+        source, reason = probe_linear()
+        print(json.dumps({"linear_source": source, "reason": reason}) if args.json
+              else f"{source}\t{reason}")
+        return
 
     today = datetime.now(timezone.utc).date()
     start, end = parse_window(args, today)
 
-    issues = [i for i in fetch_issues() if i["assignee"] and keep_issue(i, start, end)]
+    if args.issues_file:
+        raw_issues = load_issues_file(args.issues_file)
+    else:
+        source, reason = probe_linear()
+        if source != "api":
+            sys.exit(
+                f"no usable Linear source ({reason}).\n"
+                "Either set LINEAR_API_KEY, or fetch the issues through the Linear MCP\n"
+                "server and pass them with --issues-file. Run --probe to re-check, and\n"
+                "see --help for the accepted JSON shape."
+            )
+        raw_issues = [normalize_issue(i) for i in fetch_issues()]
+
+    issues = [i for i in raw_issues
+              if resolve_designer(i.get("assignee")) and keep_issue(i, start, end)]
     numbers: list[int] = []
     for issue in issues:
         found = []
-        for att in issue["attachments"]["nodes"]:
-            m = PR_URL_RE.match(att["url"] or "")
+        for url in issue["attachment_urls"]:
+            m = PR_URL_RE.match(url or "")
             if m and m.group(1).lower() == REPO.lower():
                 found.append(int(m.group(2)))
         issue["pr_numbers"] = sorted(set(found))
@@ -371,6 +544,7 @@ def main() -> None:
         counted = {pr["number"] for ts in credited.values() for t in ts for pr in t["prs"]}
         print(json.dumps({
             "window": {"start": start.isoformat(), "end": end.isoformat()},
+            "linear_source": "issues-file" if args.issues_file else "api",
             "issues_considered": len(issues),
             "credited": credited,
             "uncounted_merged_prs": None if sweep is None else {

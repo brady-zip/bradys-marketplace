@@ -1,7 +1,7 @@
 ---
 description: Generate the UX quality ticket completion table from Linear
 argument-hint: [optional date range; defaults to current Zip quarter, e.g. 2026-06-01..today]
-allowed-tools: Bash(python3:*), Bash(gh:*), Read, Edit
+allowed-tools: Bash(python3:*), Bash(gh:*), Read, Edit, Write, ToolSearch
 ---
 
 Generate the UX quality ticket completion table.
@@ -17,11 +17,62 @@ date window, pages Linear for `UX Quality` tickets in Done or Merged, reads each
 attachments, batch-fetches every attached PR's author and assignees, applies the attribution rule,
 and sweeps for merged PRs that never made it into the table.
 
-Requires `LINEAR_API_KEY` in the environment and an authenticated `gh`. Runs in a few seconds and
-always hits both APIs live, so there is nothing cached to go stale between runs.
+GitHub always goes through `gh`. Runs in a few seconds and always hits both APIs live, so there is
+nothing cached to go stale between runs.
 
 Flags: `--json` for machine-readable output · `--no-sweep` to skip the gap sweep · `--since` /
 `--until` instead of a `START..END` range. Pass no arguments for the current Zip fiscal quarter.
+
+**If it exits saying there is no usable Linear source**, fall through to step 1b — do not stop, and
+do not ask the user for an API key before trying the MCP route.
+
+## Step 1b — the Linear MCP fallback
+
+Linear is reachable two ways. `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/ux_pr_table.py --probe` prints
+which one is live: `api` (a working `LINEAR_API_KEY`, nothing more to do) or `mcp`. On `mcp`, you
+fetch the issues and hand them back to the script, which still does all the attribution work:
+
+1. **Find the Linear MCP tools.** Any Linear server works — the claude.ai connector
+   (`mcp__claude_ai_Linear__*`), a plugin-provided one (`mcp__plugin_linear_linear__*`), or a
+   directly-configured `mcp__linear__*`. Do not assume the exact names: call
+   `ToolSearch("+linear issues")` and use whatever list/get issue tools come back. If the only tools
+   exposed are `authenticate` / `complete_authentication`, the server is installed but not logged in
+   — run the authenticate tool and walk the user through the OAuth flow first.
+2. **Query the tickets:** issues with label `UX Quality` that are in a completed state OR in the
+   `Merged` state. Page until exhausted. If the list tool omits attachments, call the get-issue tool
+   per ticket to collect them — GitHub PR links live in the attachments, not the description.
+3. **Write them to JSON**, then run the script against that file (add `$ARGUMENTS` if the user passed
+   a range):
+
+   ```
+   python3 ${CLAUDE_PLUGIN_ROOT}/scripts/ux_pr_table.py --issues-file /tmp/ux_issues.json
+   ```
+
+Field names are normalized permissively, so most MCP shapes drop straight in. Per issue, supply:
+
+```json
+[{
+  "identifier": "UX-2182",
+  "title": "Consolidate Payment Method Alerts",
+  "url": "https://linear.app/ziphq/issue/UX-2182/...",
+  "state": "Done",
+  "completedAt": "2026-08-04T18:02:34.589Z",
+  "updatedAt": "2026-08-04T18:02:34.589Z",
+  "assignee": {"id": "d83e3069-...", "name": "Jenny Liu"},
+  "attachments": [{"url": "https://github.com/Greenbax/evergreen/pull/122046"}]
+}]
+```
+
+Accepted variations: a bare `{"issues": [...]}` wrapper; `state` as `{"name","type"}` or a bare
+name; `assignee` as an object or a bare display name; attachments as `{"nodes":[...]}`, a list of
+objects, or plain URL strings under `attachments` / `links` / `prUrls`.
+
+**Include the assignee `id` whenever the MCP returns one.** Matching falls back to the display name
+without it, and display names drift from the roster — Jing Jian is `JingZhi Jian` in Linear, which
+only works because of an explicit alias. `Merged` must be spelled exactly if you pass a bare state
+name, since it is the one tracked state Linear does not classify as completed.
+
+Both routes produce a byte-identical table; only the Linear fetch differs.
 
 ## Step 2 — judge the "possible tracking gaps" section
 
