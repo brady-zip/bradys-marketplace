@@ -9,10 +9,10 @@ overarching goal. This script maintains, per workstream ``<slug>``:
 
         <data>/mem0-brady/workstreams/<slug>.md
 
-    holding the Goal + a **Pieces** index (one entry per contributing worktree,
-    each *referencing* that worktree's per-cwd handoff for its current state —
-    referenced, never inlined) + a **Narrative** pointer + a hand-maintained
-    References section.
+    holding a lifecycle ``status`` (``active`` or ``archived``) + the Goal + a
+    **Pieces** index (one entry per contributing worktree, each *referencing*
+    that worktree's per-cwd handoff for its current state — referenced, never
+    inlined) + a **Narrative** pointer + a hand-maintained References section.
 
     The doc holds what must be enumerated exactly — goal, config, artifact
     pointers, the piece index. It deliberately does NOT hold narrative history:
@@ -30,6 +30,12 @@ overarching goal. This script maintains, per workstream ``<slug>``:
     to decide whether to write a handoff at all — only a tagged session gets one
     — and, when they do, to fold the workstream overview in and bake the
     re-activation call in, so the workstream rides the handoff chain forward.
+
+Note the two senses of "active", which are orthogonal: the doc's ``status`` says
+whether the *thread* is still being worked, while an active pointer says a
+*session* is currently tagged. Archiving is what keeps ``list`` readable once a
+year of finished threads has piled up — it hides them from the default listing
+without deleting the doc, its run scope, or the handoffs it references.
 
 Paths and the cwd hash scheme are kept in lockstep with the fork's
 ``_workstream_dir`` / ``_handoff_path_for`` and the plugin's per-cwd session
@@ -65,6 +71,10 @@ _NARRATIVE_COMMENT = (
     "<!-- managed: how to pull this workstream's history back, ranked -->"
 )
 _GOAL_PLACEHOLDER = "<describe the overarching objective in 1–3 sentences>"
+
+_STATUS_ACTIVE = "active"
+_STATUS_ARCHIVED = "archived"
+_STATUSES = (_STATUS_ACTIVE, _STATUS_ARCHIVED)
 
 
 def _narrative_body(slug: str) -> list[str]:
@@ -241,6 +251,72 @@ def _set(sections: list[list], name: str, body: list[str]) -> None:
     sections.append([name, body])
 
 
+def _head_field(head: list[str], key: str) -> str:
+    for ln in head:
+        m = re.match(rf"^- {re.escape(key)}:\s*(.*)$", ln)
+        if m:
+            return m.group(1).strip()
+    return ""
+
+
+def _set_head_field(head: list[str], key: str, value: str, after: str) -> None:
+    """Set ``- <key>: <value>`` in the header, inserting after ``- <after>:``.
+
+    Insertion matters for docs written before a field existed: appending would
+    land it past the blank line that ends the header block, so an old doc would
+    render differently from a fresh one.
+    """
+    for i, ln in enumerate(head):
+        if re.match(rf"^- {re.escape(key)}:", ln):
+            head[i] = f"- {key}: {value}"
+            return
+    for i, ln in enumerate(head):
+        if re.match(rf"^- {re.escape(after)}:", ln):
+            head.insert(i + 1, f"- {key}: {value}")
+            return
+    head.append(f"- {key}: {value}")
+
+
+def _status(head: list[str]) -> str:
+    """The doc's lifecycle status, defaulting to active.
+
+    Docs written before the status field existed have none; they are threads
+    nobody archived, so active is the honest reading — and the field is
+    backfilled the next time the doc is written.
+    """
+    val = _head_field(head, "status").lower()
+    return val if val in _STATUSES else _STATUS_ACTIVE
+
+
+def _read_doc(doc: Path) -> tuple[list[str], list[list]] | None:
+    try:
+        return _split(doc.read_text(encoding="utf-8"))
+    except OSError as e:
+        print(f"Could not read {doc}: {e}", file=sys.stderr)
+        return None
+
+
+def _untag_sessions(slug: str) -> int:
+    """Drop every active pointer for *slug*; returns how many were removed.
+
+    Archiving is a statement that the thread is done, so leaving sessions tagged
+    would keep them writing handoffs for it and stamping run_id=<slug> on new
+    captures — which is exactly the accumulation archiving is meant to stop.
+    """
+    ad = _active_dir()
+    if not ad.is_dir():
+        return 0
+    n = 0
+    for p in sorted(ad.glob("*.json")):
+        try:
+            if json.loads(p.read_text(encoding="utf-8")).get("slug") == slug:
+                p.unlink()
+                n += 1
+        except (OSError, json.JSONDecodeError):
+            pass
+    return n
+
+
 def _piece_line(cwd: str, branch: str, handoff: Path, ts: str) -> str:
     return (
         f"- **{Path(cwd).name}** — cwd `{cwd}` · branch `{branch or '(detached)'}`"
@@ -254,6 +330,7 @@ def _new_doc(slug: str, goal: str, ts: str) -> str:
         f"# Workstream — {slug}",
         "",
         f"- slug: {slug}",
+        f"- status: {_STATUS_ACTIVE}",
         f"- created: {ts}",
         f"- updated: {ts}",
         "",
@@ -288,12 +365,18 @@ def cmd_activate(rest: list[str]) -> int:
     _active_dir().mkdir(parents=True, exist_ok=True)
 
     created = not doc.exists()
+    revived = False
     if created:
         text = _new_doc(slug, goal, ts)
         head, sections = _split(text)
     else:
         head, sections = _split(doc.read_text(encoding="utf-8"))
         head = [re.sub(r"^- updated:.*$", f"- updated: {ts}", ln) for ln in head]
+        # Activating an archived workstream revives it: you are picking the
+        # thread back up, and a tagged session would otherwise keep writing
+        # handoffs and run-scoped captures for a thread the listing hides.
+        revived = _status(head) == _STATUS_ARCHIVED
+        _set_head_field(head, "status", _STATUS_ACTIVE, after="slug")
         # Set the goal only when the current one is empty/placeholder, so a
         # provided goal seeds an under-specified doc without clobbering a real
         # hand-written one (edit the doc directly to change an existing goal).
@@ -339,7 +422,13 @@ def cmd_activate(rest: list[str]) -> int:
         )
     _prune()
 
-    print(f"{'Created and activated' if created else 'Activated'} workstream '{slug}'.")
+    if created:
+        verb = "Created and activated"
+    elif revived:
+        verb = "Un-archived and activated"
+    else:
+        verb = "Activated"
+    print(f"{verb} workstream '{slug}'.")
     print(f"Doc: {doc}")
     if sid:
         print(f"Tagged this session ({sid}) via {src} — Stop/PreCompact will now write a "
@@ -387,28 +476,131 @@ def cmd_show(rest: list[str]) -> int:
             _print_overview(doc)
         return 0
     print("This session is not tagged with a workstream. "
-          "Run `/mem0-brady:workstream <slug>` to activate one, or `list` to see existing ones.")
+          "Run `/mem0-brady:workstream <slug>` to activate one, or "
+          "`/mem0-brady:workstream-list` to see the ones still open.")
     return 0
 
 
-def cmd_list() -> int:
+def cmd_list(rest: list[str]) -> int:
+    """List workstreams. One optional argument selects the status filter.
+
+    Defaults to active only: the whole point of archiving is that a finished
+    thread stops competing for attention with the ones still being worked.
+    """
+    arg = (rest[0] if rest else "").strip().lower().lstrip("-")
+    if arg in ("", "active"):
+        want, label = {_STATUS_ACTIVE}, "active"
+    elif arg in ("all", "archived-too", "include-archived"):
+        want, label = set(_STATUSES), "all"
+    elif arg == "archived":
+        want, label = {_STATUS_ARCHIVED}, "archived"
+    else:
+        print(f"unknown filter {arg!r} — use one of: active (default) | all | archived",
+              file=sys.stderr)
+        return 2
+
     wd = _workstream_dir()
     docs = sorted(p for p in wd.glob("*.md")) if wd.is_dir() else []
     if not docs:
         print(f"No workstreams yet (none under {wd}).")
         return 0
-    print(f"Workstreams under {wd}:")
+
+    rows: list[tuple[str, str, str, str]] = []
+    hidden = 0
     for doc in docs:
-        slug = doc.stem
         goal = "(no goal set)"
-        try:
-            _h, sections = _split(doc.read_text(encoding="utf-8"))
+        status = _STATUS_ACTIVE
+        updated = ""
+        parsed = _read_doc(doc)
+        if parsed:
+            head, sections = parsed
+            status = _status(head)
+            updated = _head_field(head, "updated")[:10]
             g = "\n".join(_get(sections, "Goal") or []).strip()
             if g and g != _GOAL_PLACEHOLDER:
                 goal = g.splitlines()[0]
-        except OSError:
-            pass
-        print(f"  - {slug}: {goal}")
+        if status not in want:
+            hidden += 1
+            continue
+        rows.append((doc.stem, status, updated, goal))
+
+    # Most-recently-touched first. A listing you consult to decide what to pick
+    # back up is ordered by recency, not alphabet; the timestamps are ISO, so
+    # they sort lexically, and an undated doc sorts last rather than first.
+    rows.sort(key=lambda r: (r[2] or "", r[0]), reverse=True)
+
+    print(f"Workstreams under {wd} ({label}):")
+    if rows:
+        for slug, status, updated, goal in rows:
+            # Only worth marking when the listing is mixed; under `archived` the
+            # tag would be on every row and say nothing.
+            mark = " [archived]" if status == _STATUS_ARCHIVED and label == "all" else ""
+            print(f"  - {slug}{mark} — updated {updated or 'unknown'} — {goal}")
+    else:
+        print(f"  (none {label})")
+    if hidden:
+        other = "active" if label == "archived" else "archived"
+        print(f"\n{hidden} {other} workstream(s) not shown — "
+              f"`/mem0-brady:workstream-list all` to include them.")
+    if rows:
+        # The doc gives the goal (what this is FOR); only the run scope knows
+        # where it got to. This script is stdlib-only and never talks to mem0,
+        # so it emits the slugs to fetch and leaves the synthesis to the caller.
+        print("\nRun scopes for current state (mem0 run_id, one per workstream):")
+        print("  " + " ".join(slug for slug, _s, _u, _g in rows))
+    return 0
+
+
+def _cmd_set_status(rest: list[str], status: str) -> int:
+    """Flip a workstream's lifecycle status (shared by archive / unarchive)."""
+    verb = "archive" if status == _STATUS_ARCHIVED else "unarchive"
+    slug = _safe_slug(rest[0]) if rest else ""
+    if not slug and status == _STATUS_ARCHIVED:
+        # Bare `archive` means "the one tagging this session" — the common case,
+        # since you archive a thread at the moment you finish working it.
+        sid, _src = _resolve_session_id(os.getcwd())
+        pointer = _active_dir() / f"{sid}.json" if sid else None
+        if pointer and pointer.is_file():
+            try:
+                slug = json.loads(pointer.read_text(encoding="utf-8")).get("slug", "")
+            except (OSError, json.JSONDecodeError):
+                slug = ""
+    if not slug:
+        print(f"usage: workstream.py {verb} <slug>"
+              + (" (or omit <slug> to archive the one tagging this session)"
+                 if status == _STATUS_ARCHIVED else ""),
+              file=sys.stderr)
+        return 2
+
+    doc = _doc_path(slug)
+    if not doc.is_file():
+        print(f"No workstream doc for '{slug}' at {doc}", file=sys.stderr)
+        return 1
+    parsed = _read_doc(doc)
+    if parsed is None:
+        return 1
+    head, sections = parsed
+    if _status(head) == status:
+        print(f"Workstream '{slug}' is already {status}.")
+        return 0
+    _set_head_field(head, "status", status, after="slug")
+    head = [re.sub(r"^- updated:.*$", f"- updated: {_now()}", ln) for ln in head]
+    doc.write_text(_join(head, sections), encoding="utf-8")
+
+    print(f"Workstream '{slug}' is now {status}.")
+    print(f"Doc: {doc}")
+    if status == _STATUS_ARCHIVED:
+        n = _untag_sessions(slug)
+        if n:
+            print(f"Untagged {n} session(s) that were still riding this workstream — "
+                  "they will stop writing handoffs for it.")
+        print("Nothing was deleted: the doc, its handoffs, and its mem0 run scope "
+              f"(`run_id={slug}`) are intact — it is just hidden from the default "
+              "listing. Re-activating it un-archives it.")
+        print(f"To retire the history too: mcp__mem0__delete_entities(run_id=\"{slug}\")")
+    else:
+        print("It shows in the default listing again. Activating it in a worktree "
+              "re-tags this session and registers that worktree as a piece.")
     return 0
 
 
@@ -423,6 +615,8 @@ def cmd_deactivate() -> int:
         try:
             pointer.unlink()
             print(f"Deactivated: removed the workstream tag for this session ({sid}).")
+            print("The workstream itself is untouched and still listed as open — "
+                  "`archive` it when the thread is finished.")
         except OSError as e:
             print(f"Could not remove {pointer}: {e}", file=sys.stderr)
             return 1
@@ -432,13 +626,17 @@ def cmd_deactivate() -> int:
 
 
 def _print_overview(doc: Path) -> None:
-    try:
-        _h, sections = _split(doc.read_text(encoding="utf-8"))
-    except OSError as e:
-        print(f"Could not read {doc}: {e}", file=sys.stderr)
+    parsed = _read_doc(doc)
+    if parsed is None:
         return
+    head, sections = parsed
     goal = "\n".join(_get(sections, "Goal") or []).strip() or "(no goal set)"
     pieces = [ln for ln in (_get(sections, "Pieces") or []) if ln.lstrip().startswith("- **")]
+    status = _status(head)
+    print(f"Status: {status}")
+    if status == _STATUS_ARCHIVED:
+        print("  (finished — hidden from the default listing; activating it un-archives it)")
+    print()
     print("Goal:")
     for ln in goal.splitlines():
         print(f"  {ln}")
@@ -479,10 +677,15 @@ def main(argv: list[str]) -> int:
     if cmd == "show":
         return cmd_show(rest)
     if cmd == "list":
-        return cmd_list()
+        return cmd_list(rest)
+    if cmd == "archive":
+        return _cmd_set_status(rest, _STATUS_ARCHIVED)
+    if cmd == "unarchive":
+        return _cmd_set_status(rest, _STATUS_ACTIVE)
     if cmd == "deactivate":
         return cmd_deactivate()
-    print(f"usage: workstream.py {{activate <slug> [goal]|show [slug]|list|deactivate}}",
+    print("usage: workstream.py {activate <slug> [goal]|show [slug]|"
+          "list [active|all|archived]|archive [slug]|unarchive <slug>|deactivate}",
           file=sys.stderr)
     return 2
 
