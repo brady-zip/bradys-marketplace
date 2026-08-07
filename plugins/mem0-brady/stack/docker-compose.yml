@@ -27,13 +27,15 @@ services:
   # server, so a container-network-only Qdrant is invisible to them and recall
   # silently returns nothing. Loopback-only, so nothing on the LAN can reach it.
   qdrant:
-    # Pinned, not :latest. This bind-mounts a storage dir that predates the
-    # compose stack (it was written by a native qdrant 1.18.2 under launchd), and
-    # Qdrant migrates storage forward on open but never back. An unpinned tag
-    # would upgrade the format on some unrelated `up -d --build` and strand the
-    # data on the old binary — :latest is already v1.19.0. Bump deliberately,
-    # with a snapshot in hand. Note the `v` prefix: qdrant publishes v1.18.2,
-    # and a bare 1.18.2 fails to resolve rather than falling back to anything.
+    # Pinned, not :latest. Qdrant migrates its storage format forward on open and
+    # never back, so an unpinned tag upgrades the volume on some unrelated
+    # `up -d --build` with no way down — :latest is already v1.19.0. What makes
+    # that expensive here is the restore path: the snapshots this stack would
+    # recover from were written by a native qdrant 1.18.2, and Qdrant does not
+    # guarantee snapshot compatibility across versions, so the pin is what keeps
+    # them restorable. Bump deliberately, with a fresh snapshot in hand. Note the
+    # `v` prefix: qdrant publishes v1.18.2, and a bare 1.18.2 fails to resolve
+    # rather than falling back to anything.
     image: qdrant/qdrant:v1.18.2
     restart: unless-stopped
     volumes:
@@ -84,8 +86,9 @@ services:
       - "127.0.0.1:${MEM0_BRADY_MCP_HOST_PORT:-8081}:8081"
 
 volumes:
-  # Named, and scoped to the compose project — so it is <project>-qdrant-storage
-  # on disk and renaming the project orphans it rather than sharing it. Back it
+  # Named, and scoped to the compose project — so it is <project>_qdrant-storage
+  # on disk (compose joins the two with an underscore, unlike the container
+  # names) and renaming the project orphans it rather than sharing it. Back it
   # up with `snapshots`, not by copying a directory: the files are only
   # consistent while Qdrant is stopped.
   qdrant-storage:
