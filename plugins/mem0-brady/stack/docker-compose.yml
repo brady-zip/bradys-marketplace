@@ -27,12 +27,38 @@ services:
   # server, so a container-network-only Qdrant is invisible to them and recall
   # silently returns nothing. Loopback-only, so nothing on the LAN can reach it.
   qdrant:
-    image: qdrant/qdrant:latest
+    # Pinned, not :latest. This bind-mounts a storage dir that predates the
+    # compose stack (it was written by a native qdrant 1.18.2 under launchd), and
+    # Qdrant migrates storage forward on open but never back. An unpinned tag
+    # would upgrade the format on some unrelated `up -d --build` and strand the
+    # data on the old binary — :latest is already v1.19.0. Bump deliberately,
+    # with a snapshot in hand. Note the `v` prefix: qdrant publishes v1.18.2,
+    # and a bare 1.18.2 fails to resolve rather than falling back to anything.
+    image: qdrant/qdrant:v1.18.2
     restart: unless-stopped
     volumes:
-      # Absolute path, set in the config — deliberately not a relative path, so
-      # the data does not move just because this file did.
-      - ${MEM0_BRADY_QDRANT_STORAGE:?set MEM0_BRADY_QDRANT_STORAGE in ~/.config/mem0-brady/.env}:/qdrant/storage
+      # Live data on a NAMED VOLUME, not a host bind mount. On Docker Desktop or
+      # Colima the host filesystem reaches the VM over virtiofs, which the Linux
+      # kernel implements on top of FUSE — so statfs reports `fuse`, Qdrant's
+      # startup check errors with "FUSE filesystems may cause data corruption due
+      # to caching issues", and the mmap layer degrades to single-mmap. Qdrant
+      # mmaps its segment files, so this is not purely cosmetic. A named volume
+      # lives on the VM's own ext4 and takes virtiofs out of the data path.
+      #
+      # The tradeoff is that the data is no longer directly visible on the host,
+      # and `colima delete` / `docker volume rm` destroys it. Snapshots are the
+      # backup, which is why they get a host-visible mount below.
+      - qdrant-storage:/qdrant/storage
+      # Snapshot output, on the host, so backups survive the VM. Qdrant only
+      # writes here on an explicit snapshot call, so virtiofs is not in the hot
+      # path and the FUSE caveat above does not apply.
+      - ${MEM0_BRADY_QDRANT_SNAPSHOTS:-$HOME/.local/share/mem0-brady/qdrant-snapshots}:/qdrant/snapshots
+      # Read-only view of the pre-compose native-Qdrant storage dir. Kept mounted
+      # so `snapshots/recover` can reach the snapshots taken before the move, and
+      # so MEM0_BRADY_QDRANT_STORAGE (which setup.sh and doctor.sh both require)
+      # still names something real. Safe to drop once you no longer need to
+      # restore from it.
+      - ${MEM0_BRADY_QDRANT_STORAGE:?set MEM0_BRADY_QDRANT_STORAGE in ~/.config/mem0-brady/.env}:/qdrant/restore:ro
     expose:
       - "6333"
     ports:
@@ -56,3 +82,10 @@ services:
       - qdrant
     ports:
       - "127.0.0.1:${MEM0_BRADY_MCP_HOST_PORT:-8081}:8081"
+
+volumes:
+  # Named, and scoped to the compose project — so it is <project>-qdrant-storage
+  # on disk and renaming the project orphans it rather than sharing it. Back it
+  # up with `snapshots`, not by copying a directory: the files are only
+  # consistent while Qdrant is stopped.
+  qdrant-storage:

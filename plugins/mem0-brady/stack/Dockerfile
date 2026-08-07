@@ -22,20 +22,24 @@ RUN pip install --no-cache-dir uv
 # changes only.
 COPY server/ /opt/mem0-mcp-selfhosted/
 
-# Dep extras deliberately differ from the plugin's host-side `uv tool install`:
-# the server runs no reranker (see MEM0_RERANK_PROVIDER), so sentence-transformers
-# and its torch dependency are omitted here. The CODE is what must match, and
-# does — both install the same /opt source tree.
-#   --with fastembed    : Qdrant BM25 sparse vectors → hybrid (dense+keyword) search.
-#   --with "mem0ai[nlp]": spaCy lemmatizer feeding BM25 (plural/tense normalization).
-#   --with pip          : `spacy download` shells out to pip; the uv-tool venv needs it.
+# Dep extras deliberately differ from the plugin's host-side `uv tool install`.
+# The CODE is what must match, and does — both install the same /opt source tree.
+#   --with fastembed             : Qdrant BM25 sparse vectors → hybrid (dense+keyword) search.
+#   --with "mem0ai[nlp]"         : spaCy lemmatizer feeding BM25 (plural/tense normalization).
+#   --with pip                   : `spacy download` shells out to pip; the uv-tool venv needs it.
+#   --with sentence-transformers : the local CrossEncoder reranker. Carries torch, which is
+#                                  most of this image's size. Omit it AND unset
+#                                  MEM0_RERANK_PROVIDER together: config.py reads that key
+#                                  whether or not the dependency is present, so dropping only
+#                                  one of the two is what produces an import error at startup.
 # [direct] pulls mem0ai + its providers: the SERVER runs mem0 in-process, so it
 # needs them. Hosts that reach this server over MCP install the package without
 # that extra and stay small.
 RUN uv tool install "/opt/mem0-mcp-selfhosted[direct]" \
     --with fastembed \
     --with "mem0ai[nlp]" \
-    --with pip
+    --with pip \
+    --with sentence-transformers
 ENV PATH="/root/.local/bin:${PATH}"
 
 # Pin the HF cache so models baked at build time (as root) are found at runtime
@@ -50,6 +54,12 @@ RUN /root/.local/share/uv/tools/mem0-mcp-selfhosted/bin/python -m spacy download
 # Prefetch the fastembed BM25 model (Qdrant/bm25) + its stopword files.
 RUN /root/.local/share/uv/tools/mem0-mcp-selfhosted/bin/python \
     -c "from fastembed import SparseTextEmbedding; SparseTextEmbedding('Qdrant/bm25')"
+# Prefetch the CrossEncoder reranker. Without this the first search after every
+# container recreate pays the model download, and a search is exactly the path
+# that must not block — recall hooks fail open, so a slow first call reads as
+# memory being empty rather than as a cold start.
+RUN /root/.local/share/uv/tools/mem0-mcp-selfhosted/bin/python \
+    -c "from sentence_transformers import CrossEncoder; CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')"
 
 # streamable-http listen port (see MEM0_PORT in .env)
 EXPOSE 8081
