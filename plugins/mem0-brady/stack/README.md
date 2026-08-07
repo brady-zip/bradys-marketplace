@@ -104,6 +104,8 @@ holds your OpenAI key and controls shared memory. Two ways in, and they coexist:
 - **Laptop availability.** Routines run unattended — if this machine is asleep or
   offline the endpoint is dead. `caffeinate`, or move to a small VPS, if
   unattended routines are a hard requirement.
-- **Reranker.** Not installed in this image (`sentence-transformers` and its
-  torch dependency are omitted). Embeddings and reranking are decoupled, so one
-  can be added later as a post-retrieval step with no re-embedding.
+- **Reranker.** Installed (`sentence-transformers`, and the CrossEncoder weights
+  are baked at build time). Torch is most of this image's size, so if you don't
+  want it, drop `--with sentence-transformers` from the Dockerfile *and* unset
+  `MEM0_RERANK_PROVIDER` — `config.py` reads that key whether or not the
+  dependency is there, so removing only one of the two breaks startup.

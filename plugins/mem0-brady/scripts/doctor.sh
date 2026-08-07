@@ -23,7 +23,9 @@
 #
 # Compose stack only (MEM0_BRADY_STACK=compose):
 #   - docker is running and both containers are up
-#   - the Qdrant storage dir is present + writable
+#   - the named volume holding the live Qdrant data exists, the host snapshot
+#     dir is writable, and the read-only pre-compose dir still resolves — three
+#     things, because under compose they are three different places
 #   - the RUNNING container's config still matches the config file. A container
 #     keeps serving whatever it was started with, so an edited .env and a stale
 #     container are indistinguishable from the outside — this is the one check
@@ -83,6 +85,10 @@ case "$STACK" in
   # here in a way an external one is not.
   compose)  MCP_MODE=1; COMPOSE_MODE=1 ;;
 esac
+# Names both the containers and the named volume the live data sits in
+# (<project>_qdrant-storage). Resolved up here, not in the compose section,
+# because the storage check needs it even when docker is down.
+COMPOSE_PROJECT="$(env_get MEM0_BRADY_COMPOSE_PROJECT)"; COMPOSE_PROJECT="${COMPOSE_PROJECT:-mem0-host}"
 
 print_header() { printf "\n${BOLD}%s${NC}\n" "$1"; printf '%s\n' "------------------------------------------------------------"; }
 pass() { printf "  ${GREEN}OK${NC}      %s\n" "$1"; }
@@ -311,20 +317,19 @@ if [ "$COMPOSE_MODE" = "1" ]; then
     fail_required "docker is installed but not running" "Start Docker, then re-run."
   else
     pass "docker running"
-    PROJECT="$(env_get MEM0_BRADY_COMPOSE_PROJECT)"; PROJECT="${PROJECT:-mem0-host}"
     for svc in qdrant mem0-mcp; do
-      cid="$(docker ps -q -f "name=^${PROJECT}-${svc}-1$" 2>/dev/null || true)"
+      cid="$(docker ps -q -f "name=^${COMPOSE_PROJECT}-${svc}-1$" 2>/dev/null || true)"
       if [ -n "$cid" ]; then
-        pass "${PROJECT}-${svc}-1 running"
+        pass "${COMPOSE_PROJECT}-${svc}-1 running"
       else
-        fail_required "${PROJECT}-${svc}-1 not running" \
+        fail_required "${COMPOSE_PROJECT}-${svc}-1 not running" \
           "Start it: docker compose --env-file ${ENV_FILE} up -d"
       fi
     done
     # The drift check proper: compare the model the container was started with
     # against the one the config now says. They diverge the moment you edit the
     # config without restarting, and every write silently uses the old value.
-    live_model="$(docker exec "${PROJECT}-mem0-mcp-1" printenv MEM0_LLM_MODEL 2>/dev/null || true)"
+    live_model="$(docker exec "${COMPOSE_PROJECT}-mem0-mcp-1" printenv MEM0_LLM_MODEL 2>/dev/null || true)"
     cfg_model="$(env_get MEM0_LLM_MODEL)"
     if [ -n "$live_model" ] && [ -n "$cfg_model" ]; then
       if [ "$live_model" = "$cfg_model" ]; then
@@ -340,15 +345,55 @@ fi
 # --- Qdrant storage ----------------------------------------------------------
 print_header "Qdrant storage (required)"
 if [ "$COMPOSE_MODE" = "1" ]; then
+  # Under compose the live data is NOT on a host path — it sits in a named
+  # volume on the VM's own filesystem, to keep virtiofs/FUSE out of Qdrant's
+  # mmap path (see the comments in stack/docker-compose.yml). So the one
+  # directory this used to check is now three separate things, and calling any
+  # of the other two "storage" sends you to the wrong place mid-incident.
+  QVOLUME="${COMPOSE_PROJECT}_qdrant-storage"
+  if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
+    # The compose section above already failed the run on this; don't double-count.
+    fail_optional "cannot check the live storage volume (${QVOLUME}) — docker is not available" \
+      "Start Docker, then re-run."
+  elif docker volume inspect "$QVOLUME" >/dev/null 2>&1; then
+    pass "live storage volume present: ${QVOLUME}"
+  else
+    fail_required "live storage volume missing: ${QVOLUME}" \
+      "It is created on first start (docker compose --env-file ${ENV_FILE} up -d). If it existed and is now gone, the memories went with it — restore from a snapshot."
+  fi
+
+  # The only copy of the data that outlives the VM. `colima delete` or a stray
+  # `docker volume rm` takes the volume; this is what is left.
+  CSNAPS="$(env_get MEM0_BRADY_QDRANT_SNAPSHOTS)"
+  if [ -z "$CSNAPS" ]; then
+    # Config predates the key. Fall back to the LITERAL default in
+    # docker-compose.yml, not to ${DATA_DIR}/... — compose hardcodes $HOME in its
+    # `:-`, so on a custom data dir a derived path names something compose never
+    # mounts, and the real snapshot dir would go unchecked.
+    CSNAPS="${HOME}/.local/share/mem0-brady/qdrant-snapshots"
+    fail_optional "MEM0_BRADY_QDRANT_SNAPSHOTS unset — assuming compose's built-in default (${CSNAPS})" \
+      "Re-run /mem0-brady:setup to pin it in ${ENV_FILE}."
+  fi
+  if [ -d "$CSNAPS" ] && [ -w "$CSNAPS" ]; then
+    pass "snapshot dir present + writable: ${CSNAPS}"
+  elif [ -d "$CSNAPS" ]; then
+    fail_optional "snapshot dir not writable: ${CSNAPS}" "chmod u+w ${CSNAPS}"
+  else
+    fail_optional "snapshot dir missing: ${CSNAPS}" \
+      "compose recreates it on next start, but until a snapshot lands there the volume is the only copy."
+  fi
+
+  # Mounted read-only at /qdrant/restore, and holds no live data. Compose still
+  # refuses to start without the variable, so an unset one is fatal; a path that
+  # no longer exists only costs you the ability to recover pre-compose snapshots.
   CSTORAGE="$(env_get MEM0_BRADY_QDRANT_STORAGE)"
   if [ -z "$CSTORAGE" ]; then
-    fail_required "no MEM0_BRADY_QDRANT_STORAGE in ${ENV_FILE}" "compose cannot start without it — run /mem0-brady:setup."
-  elif [ -d "$CSTORAGE" ] && [ -w "$CSTORAGE" ]; then
-    pass "storage dir present + writable: ${CSTORAGE}"
+    fail_required "no MEM0_BRADY_QDRANT_STORAGE in ${ENV_FILE}" "compose refuses to start without it — run /mem0-brady:setup."
   elif [ -d "$CSTORAGE" ]; then
-    fail_required "storage dir not writable: ${CSTORAGE}" "chmod u+w ${CSTORAGE}"
+    pass "pre-compose dir mounted read-only at /qdrant/restore: ${CSTORAGE}"
   else
-    fail_required "storage dir missing: ${CSTORAGE}" "Create it, or run /mem0-brady:setup."
+    fail_optional "pre-compose dir missing: ${CSTORAGE}" \
+      "Only matters if you still need to recover a snapshot taken before the move to compose; otherwise drop the /qdrant/restore mount."
   fi
 elif [ "$STACK" != "managed" ]; then
   pass "storage is owned by an external stack, not the plugin"
