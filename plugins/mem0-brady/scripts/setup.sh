@@ -257,6 +257,18 @@ if [ "$COMPOSE_MODE" = "1" ]; then
     /*) ;;
     *) die "MEM0_BRADY_QDRANT_STORAGE must be absolute (got '${COMPOSE_STORAGE}') — compose resolves it relative to stack/, not to you" ;;
   esac
+  # Written explicitly rather than left to a default, because compose and
+  # doctor.sh derive their fallbacks differently: compose hardcodes $HOME/... in
+  # its `:-`, doctor uses ${MEM0_BRADY_DATA_DIR}. With a custom data dir and this
+  # key unset they disagree, and doctor warns about a path compose never mounts
+  # while the real snapshot dir goes unchecked. Resolving it once here collapses
+  # both defaults into one value both sides read.
+  COMPOSE_SNAPSHOTS="${MEM0_BRADY_QDRANT_SNAPSHOTS:-$(env_get MEM0_BRADY_QDRANT_SNAPSHOTS "$ENV_FILE")}"
+  COMPOSE_SNAPSHOTS="${COMPOSE_SNAPSHOTS:-${DATA_DIR}/qdrant-snapshots}"
+  case "$COMPOSE_SNAPSHOTS" in
+    /*) ;;
+    *) die "MEM0_BRADY_QDRANT_SNAPSHOTS must be absolute (got '${COMPOSE_SNAPSHOTS}') — compose resolves it relative to stack/, not to you" ;;
+  esac
   QDRANT_HOST_PORT="$(env_get MEM0_BRADY_QDRANT_HOST_PORT "$ENV_FILE")"
   QDRANT_HOST_PORT="${QDRANT_HOST_PORT:-6333}"
   MCP_HOST_PORT="$(env_get MEM0_BRADY_MCP_HOST_PORT "$ENV_FILE")"
@@ -274,7 +286,8 @@ if [ "$COMPOSE_MODE" = "1" ]; then
   COMPOSE_PROJECT="$(env_get MEM0_BRADY_COMPOSE_PROJECT "$ENV_FILE")"
   COMPOSE_PROJECT="${COMPOSE_PROJECT:-mem0-host}"
   say "identity: collection=${COLLECTION} user_id=${USER_ID}"
-  say "stack: storage=${COMPOSE_STORAGE} qdrant=:${QDRANT_HOST_PORT} mcp=:${MCP_HOST_PORT}"
+  say "stack: snapshots=${COMPOSE_SNAPSHOTS} qdrant=:${QDRANT_HOST_PORT} mcp=:${MCP_HOST_PORT}"
+  say "restore-only (read-only mount, live data is in a named volume): ${COMPOSE_STORAGE}"
   say "llm=${LLM_MODEL}  mcp=${MCP_URL}"
 elif [ "$MCP_MODE" = "1" ]; then
   say "mcp=${MCP_URL}"
@@ -437,9 +450,11 @@ fi
 step "Config + data dirs"
 mkdir -p "$CONFIG_DIR" "$LA_DIR"
 [ "$STACK" = "managed" ] && mkdir -p "$QDRANT_STORAGE"
-# Compose binds this path into the Qdrant container. Docker would happily create
-# it as root-owned if absent, so make it first, as the user.
-[ "$COMPOSE_MODE" = "1" ] && mkdir -p "$COMPOSE_STORAGE"
+# Compose binds both paths into the Qdrant container. Docker would happily create
+# either as root-owned if absent, so make them first, as the user. The snapshot
+# dir is the one that has to be writable — it is the only copy of the data that
+# outlives the VM; COMPOSE_STORAGE is mounted read-only, for restores.
+[ "$COMPOSE_MODE" = "1" ] && mkdir -p "$COMPOSE_STORAGE" "$COMPOSE_SNAPSHOTS"
 
 RENDERED="$(mktmp)"
 trap 'rm -f "$RENDERED"' EXIT
@@ -460,11 +475,12 @@ fi
 COLLECTION="${COLLECTION:-}"; USER_ID="${USER_ID:-}"
 QDRANT_URL="${QDRANT_URL:-}"; MCP_PORT="${MCP_PORT:-}"
 COMPOSE_STORAGE="${COMPOSE_STORAGE:-}"; LLM_MODEL="${LLM_MODEL:-}"
+COMPOSE_SNAPSHOTS="${COMPOSE_SNAPSHOTS:-}"
 QDRANT_HOST_PORT="${QDRANT_HOST_PORT:-}"; MCP_HOST_PORT="${MCP_HOST_PORT:-}"
 KEY="$OPENAI_KEY" STACK_V="$STACK" COLLECTION_V="$COLLECTION" USER_ID_V="$USER_ID" \
 QDRANT_URL_V="$QDRANT_URL" MCP_URL_V="$MCP_URL" MCP_PORT_V="$MCP_PORT" \
 QHTTP_V="$QDRANT_HTTP_PORT" QGRPC_V="$QDRANT_GRPC_PORT" \
-QSTORAGE_V="$COMPOSE_STORAGE" QHOST_V="$QDRANT_HOST_PORT" \
+QSTORAGE_V="$COMPOSE_STORAGE" QSNAPS_V="$COMPOSE_SNAPSHOTS" QHOST_V="$QDRANT_HOST_PORT" \
 MCPHOST_V="$MCP_HOST_PORT" LLM_MODEL_V="$LLM_MODEL" \
 awk '{
   gsub(/__OPENAI_API_KEY__/,     ENVIRON["KEY"]);
@@ -477,6 +493,7 @@ awk '{
   gsub(/__QDRANT_HTTP_PORT__/,   ENVIRON["QHTTP_V"]);
   gsub(/__QDRANT_GRPC_PORT__/,   ENVIRON["QGRPC_V"]);
   gsub(/__QDRANT_STORAGE__/,     ENVIRON["QSTORAGE_V"]);
+  gsub(/__QDRANT_SNAPSHOTS__/,   ENVIRON["QSNAPS_V"]);
   gsub(/__QDRANT_HOST_PORT__/,   ENVIRON["QHOST_V"]);
   gsub(/__MCP_HOST_PORT__/,      ENVIRON["MCPHOST_V"]);
   gsub(/__LLM_MODEL__/,          ENVIRON["LLM_MODEL_V"]);
@@ -502,6 +519,7 @@ if [ -f "$ENV_FILE" ]; then
   for k in MEM0_BRADY_STACK MEM0_COLLECTION MEM0_USER_ID MEM0_QDRANT_URL \
            MEM0_BRADY_MCP_URL MEM0_PORT MEM0_BRADY_QDRANT_HTTP_PORT \
            MEM0_BRADY_QDRANT_GRPC_PORT MEM0_BRADY_QDRANT_STORAGE \
+           MEM0_BRADY_QDRANT_SNAPSHOTS \
            MEM0_BRADY_QDRANT_HOST_PORT MEM0_BRADY_MCP_HOST_PORT OPENAI_API_KEY; do
     newline="$(grep -E "^${k}=" "$RENDERED" | head -1 || true)"
     [ -n "$newline" ] || continue

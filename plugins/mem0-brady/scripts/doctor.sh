@@ -364,7 +364,16 @@ if [ "$COMPOSE_MODE" = "1" ]; then
 
   # The only copy of the data that outlives the VM. `colima delete` or a stray
   # `docker volume rm` takes the volume; this is what is left.
-  CSNAPS="$(env_get MEM0_BRADY_QDRANT_SNAPSHOTS)"; CSNAPS="${CSNAPS:-${DATA_DIR}/qdrant-snapshots}"
+  CSNAPS="$(env_get MEM0_BRADY_QDRANT_SNAPSHOTS)"
+  if [ -z "$CSNAPS" ]; then
+    # Config predates the key. Fall back to the LITERAL default in
+    # docker-compose.yml, not to ${DATA_DIR}/... — compose hardcodes $HOME in its
+    # `:-`, so on a custom data dir a derived path names something compose never
+    # mounts, and the real snapshot dir would go unchecked.
+    CSNAPS="${HOME}/.local/share/mem0-brady/qdrant-snapshots"
+    fail_optional "MEM0_BRADY_QDRANT_SNAPSHOTS unset — assuming compose's built-in default (${CSNAPS})" \
+      "Re-run /mem0-brady:setup to pin it in ${ENV_FILE}."
+  fi
   if [ -d "$CSNAPS" ] && [ -w "$CSNAPS" ]; then
     pass "snapshot dir present + writable: ${CSNAPS}"
   elif [ -d "$CSNAPS" ]; then
