@@ -459,7 +459,10 @@ _ws_field() { sed -nE "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"([^\"]*)\".*/\1/p" "
 
 if [ -d "$WORKSTREAM_DIR" ]; then
   ws_docs="$(find "$WORKSTREAM_DIR" -maxdepth 1 -type f -name '*.md' 2>/dev/null | wc -l | tr -d ' ')"
-  pass "workstreams dir present: ${WORKSTREAM_DIR} (${ws_docs} doc(s))"
+  # A doc is archived only if it says so: the status field postdates the first
+  # workstreams, and an un-statused doc is one nobody archived.
+  ws_archived="$(grep -lE '^- status:[[:space:]]*archived' "$WORKSTREAM_DIR"/*.md 2>/dev/null | wc -l | tr -d ' ')"
+  pass "workstreams dir present: ${WORKSTREAM_DIR} (${ws_docs} doc(s), $((ws_docs - ws_archived)) active / ${ws_archived} archived)"
   [ -w "$WORKSTREAM_DIR" ] || fail_optional "workstreams dir not writable: ${WORKSTREAM_DIR}" "chmod u+w ${WORKSTREAM_DIR}"
 else
   pass "no workstreams yet — created on first /mem0-brady:workstream activation"

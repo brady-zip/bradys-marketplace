@@ -1,6 +1,6 @@
 ---
 name: workstream
-description: Activate or manage a "workstream" — one thread of work that spans multiple Claude sessions, commits, branches, and worktrees, under a single overarching goal. Activating tags THIS session with the workstream, pulls its details doc (goal + an index of the pieces of work, each referencing its own handoff for current state), and switches on the workstream-aware Stop/PreCompact handoff so the workstream propagates to future sessions via the handoff chain — an untagged session writes no handoff. Use when the user says "activate workstream", "track this as a workstream", "what workstream am I on", "start/resume workstream <name>", or when a resume handoff says to run `/mem0-brady:workstream <slug>`.
+description: Activate or manage a "workstream" — one thread of work that spans multiple Claude sessions, commits, branches, and worktrees, under a single overarching goal. Activating tags THIS session with the workstream, pulls its details doc (goal + an index of the pieces of work, each referencing its own handoff for current state), and switches on the workstream-aware Stop/PreCompact handoff so the workstream propagates to future sessions via the handoff chain — an untagged session writes no handoff. Also runs the lifecycle: archive a finished workstream, un-archive one you're picking back up. Use when the user says "activate workstream", "track this as a workstream", "what workstream am I on", "start/resume workstream <name>", "archive this workstream / that one's done", or when a resume handoff says to run `/mem0-brady:workstream <slug>`.
 ---
 
 # Workstreams
@@ -25,6 +25,11 @@ How it works:
   handoff runs the skill, re-tags itself, and pulls the workstream forward.
 - **Current state is referenced, not inlined.** The details doc's **Pieces** index points at
   each worktree's handoff. You read those on demand — they are never auto-injected.
+- **A workstream has a lifecycle.** Its doc carries a `status`: `active` while the thread is
+  being worked, `archived` once it's done. Archiving hides it from the default listing and
+  untags any session still riding it; it deletes nothing. Activating an archived one revives
+  it. Note the two senses of "active" — the doc's *status* is about the thread, an active
+  pointer is about a *session*.
 
 All state lives under `~/.local/share/mem0-brady/` (`workstreams/<slug>.md`, the source of
 truth; `workstreams/active/<session_id>.json`, the per-session tag). The helper script does
@@ -75,8 +80,21 @@ or a handoff says to run `/mem0-brady:workstream <slug>`:
 
 - "What workstream am I on?" → `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/workstream.py" show`
 - Show a specific one → `... show <slug>`
-- List all → `... list`
-- Stop tagging this session → `... deactivate`
+- List them → `... list` (open only; `list all` or `list archived` for finished ones), which
+  prints each one's status, last-updated date and goal, newest first. Prefer the
+  `/mem0-brady:workstream-list` **command** when listing is what the user actually wants: it
+  runs this and then synthesizes a one-line *current state* per workstream from each run scope,
+  which the script alone cannot do (stdlib only, no mem0 access). The doc says what a thread is
+  for; only the run scope says where it got to.
+- "This one's done" / "archive it" → `... archive [slug]` (omit the slug to archive the one
+  tagging this session). Say what it did and didn't do: the doc, its handoffs and its
+  `run_id=<slug>` history all survive — archiving only drops it out of the default listing and
+  untags sessions. Offer `mcp__mem0__delete_entities(run_id="<slug>")` separately if they
+  actually want the history gone.
+- "Reopen it" → `... unarchive <slug>` to just un-hide it, or plain `activate <slug>` when they
+  are resuming work in this worktree (that un-archives *and* tags).
+- Stop tagging this session → `... deactivate`. Distinct from archiving: deactivate ends *this
+  session's* involvement, the workstream stays open.
 
 </what-to-do>
 
@@ -86,7 +104,9 @@ or a handoff says to run `/mem0-brady:workstream <slug>`:
 
 `~/.local/share/mem0-brady/workstreams/<slug>.md` is the source of truth for everything that
 must be enumerated exactly, and is safe to hand-edit. The skill fully manages the **Pieces**
-section (one entry per worktree, deduped by cwd) and bumps `updated`; it sets the **Goal** only
+section (one entry per worktree, deduped by cwd), the header's `status` and `updated` fields
+(a doc predating `status` reads as active, and gets the field backfilled next write); it sets
+the **Goal** only
 when it's still the placeholder (edit the doc directly to revise an existing goal); it rewrites
 the **Narrative** section, which is a fixed pointer at the run scope rather than content
 (backfilled into docs created before run_id scoping); and it leaves **References** verbatim for

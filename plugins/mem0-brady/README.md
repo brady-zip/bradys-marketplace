@@ -35,7 +35,8 @@ Mem0 does **both** kinds of memory here:
   across commits, branches, and worktrees) under one overarching goal: it tags the session,
   maintains a referenceable details doc, and switches on the workstream-aware Stop/PreCompact
   **handoff** so the thread propagates to future sessions. Tagging is what gates the handoff —
-  an untagged session writes none. See [Workstreams](#workstreams).
+  an untagged session writes none. `/mem0-brady:workstream-list` lists the ones still open
+  (`all` to include archived). See [Workstreams](#workstreams).
 
 (This replaced a Honcho-based passive layer — Mem0 now owns the implicit capture too.)
 
@@ -295,7 +296,25 @@ past the point anyone rereads it, because every session appends and none prune. 
 `search_memories(query=…, run_id=<slug>)`; retiring a finished thread is one
 `delete_entities(run_id=<slug>)`.
 
-Beyond activation, ask "what workstream am I on" (show), or list / deactivate. The helper
+### Lifecycle
+
+A workstream's doc carries a **`status`**: `active` while the thread is being worked,
+`archived` once it's finished. `/mem0-brady:workstream-list` shows the active ones — pass
+`all` (or `archived`) to see the rest — newest-touched first, each with a **one-line current
+state synthesized from its run scope**. That last part is the reason to run it: the doc's goal
+says what a thread is *for*, and only `run_id=<slug>` knows where it *got to*. The command also
+reports the two ways those diverge — a doc whose run scope is empty (never tagged), and a run
+scope with no doc at all (a thread nobody can list). Archiving is not deletion: the doc, the handoffs it
+references and its `run_id` history all survive, and re-activating the slug un-archives it.
+What archiving *does* do is untag any session still riding it, so a finished thread stops
+producing handoffs and run-scoped captures. Retiring the history is the separate, explicit
+`delete_entities(run_id=<slug>)`.
+
+Two things are called "active" here and they're orthogonal: a **doc's status** says whether
+the thread is still live; an **active pointer** says a session is currently tagged.
+
+Beyond activation, ask "what workstream am I on" (show), list, archive / unarchive, or
+deactivate (untag this session, leaving the workstream open). The helper
 (`scripts/workstream.py`, stdlib-only) does all file I/O deterministically.
 
 **Per-session keying** depends on the skill learning the same `session_id` the Stop hook
