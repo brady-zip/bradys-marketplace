@@ -1,0 +1,9 @@
+{
+  "author": {
+    "name": "Brady Watkinson",
+    "email": "brady@local"
+  },
+  "description": "Collaborative Datadog dashboard creation with best-practice widget selection and JSON generation",
+  "name": "datadog-dashboards",
+  "version": "260813.0"
+}

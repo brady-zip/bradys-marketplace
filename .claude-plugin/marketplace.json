@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "mem0-brady",
-      "description": "B's personal self-hosted Mem0 backbone — the single memory store shared by Claude Code and Hal. Does BOTH explicit hard facts (mcp__mem0__* tools) and passive auto-capture/recall (SessionStart/UserPromptSubmit/Read/Stop/PreCompact hooks), partitioned by app_id (evergreen / general / hal-ops). Bundles the grill-me skill (Mem0-backed plan/design interview). Store identity is per-install — managed (local Qdrant + MCP server under launchd, no Docker), compose (this plugin builds and runs the stack from its vendored server), or external (somebody else runs the server) — and the whole configuration lives in one file, ~/.config/mem0-brady/.env. /mem0-brady:migrate moves memories between stacks. Run /mem0-brady:setup once.",
+      "description": "B's personal self-hosted Mem0 backbone \u2014 the single memory store shared by Claude Code and Hal. Does BOTH explicit hard facts (mcp__mem0__* tools) and passive auto-capture/recall (SessionStart/UserPromptSubmit/Read/Stop/PreCompact hooks), partitioned by app_id (evergreen / general / hal-ops). Bundles the grill-me skill (Mem0-backed plan/design interview). Store identity is per-install \u2014 managed (local Qdrant + MCP server under launchd, no Docker), compose (this plugin builds and runs the stack from its vendored server), or external (somebody else runs the server) \u2014 and the whole configuration lives in one file, ~/.config/mem0-brady/.env. /mem0-brady:migrate moves memories between stacks. Run /mem0-brady:setup once.",
       "version": "260807.0",
       "author": {
         "name": "Brady Watkinson",
@@ -20,7 +20,7 @@
     },
     {
       "name": "slack-bridge",
-      "description": "Bridge to Slack's web API via browser session tokens (xoxc/xoxd) — surfaces what the hosted Slack MCP can't: true unread (Activity feed) with real bulk mark-read, and the saved-for-later 'Later' list (list/complete/snooze/archive). Skills: /slack-triage (interactive unread board), /slack-saved (grounded, stateful followup worklist with a durable decision store), /slack-unwrapped (stats recap), plus /slack-setup and /slack-doctor. Bundles a custom Python MCP server (13 tools) + a Chrome token-grabber extension. Run /slack-setup once.",
+      "description": "Bridge to Slack's web API via browser session tokens (xoxc/xoxd) \u2014 surfaces what the hosted Slack MCP can't: true unread (Activity feed) with real bulk mark-read, and the saved-for-later 'Later' list (list/complete/snooze/archive). Skills: /slack-triage (interactive unread board), /slack-saved (grounded, stateful followup worklist with a durable decision store), /slack-unwrapped (stats recap), plus /slack-setup and /slack-doctor. Bundles a custom Python MCP server (13 tools) + a Chrome token-grabber extension. Run /slack-setup once.",
       "version": "260626.0",
       "author": {
         "name": "Brady Watkinson",
@@ -42,7 +42,7 @@
     },
     {
       "name": "design-ops",
-      "description": "Design ops commands for the UX team — /design-ops:ux-ticket-pr-completion-table generates the quarterly UX Quality ticket completion table from Linear, cross-checked against merged GitHub PRs.",
+      "description": "Design ops commands for the UX team \u2014 /design-ops:ux-ticket-pr-completion-table generates the quarterly UX Quality ticket completion table from Linear, cross-checked against merged GitHub PRs.",
       "version": "260804.0",
       "author": {
         "name": "Brady Watkinson",
@@ -50,6 +50,17 @@
       },
       "source": "./plugins/design-ops",
       "category": "productivity"
+    },
+    {
+      "name": "datadog-dashboards",
+      "description": "Collaborative Datadog dashboard creation with best-practice widget selection and JSON generation",
+      "version": "260813.0",
+      "author": {
+        "name": "Brady Watkinson",
+        "email": "brady@local"
+      },
+      "source": "./plugins/datadog-dashboards",
+      "category": "development"
     }
   ]
 }
