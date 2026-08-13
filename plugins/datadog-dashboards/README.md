@@ -4,23 +4,32 @@ Collaborative Datadog dashboard creation with best-practice widget selection, me
 
 ## Installation
 
-Install via the Claude Code CLI by pointing at this marketplace:
+Add the marketplace once per machine, then install the plugin — either from inside a Claude Code session or from the terminal:
 
-```sh
-claude --plugin-url https://github.com/brady-zip/local-marketplace
+<details>
+<summary><strong>In Claude Code</strong> (slash commands)</summary>
+
+```
+/plugin marketplace add brady-zip/bradys-marketplace
+/plugin install datadog-dashboards@bradys-marketplace
 ```
 
-Then enable the plugin from the marketplace prompt, or install it directly:
+</details>
+
+<details>
+<summary><strong>From the terminal</strong> (CLI)</summary>
 
 ```sh
-claude plugin install datadog-dashboards@local-marketplace
+claude plugin marketplace add brady-zip/bradys-marketplace
+claude plugin install datadog-dashboards@bradys-marketplace
 ```
 
-After install, verify all dependencies are present:
+</details>
 
-```sh
-${CLAUDE_PLUGIN_ROOT}/scripts/check-setup.sh
-```
+After install, verify all dependencies are present by asking Claude to run the plugin's
+check script (it resolves `${CLAUDE_PLUGIN_ROOT}` to wherever the plugin was installed):
+
+> run the datadog-dashboards check-setup script
 
 The check script verifies:
 
