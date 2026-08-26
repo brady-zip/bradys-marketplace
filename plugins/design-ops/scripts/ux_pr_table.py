@@ -72,7 +72,8 @@ DESIGNERS: dict[str, tuple[str, str | None]] = {
     "Joyce Liu": ("14f443dd-0823-4859-bb69-53e552307e2d", "jambajoyce"),
     "Xande Macedo": ("f37591a1-0e6f-47ff-b3b0-f28aab4fe17a", None),
     "Ying Wong": ("7a9dccde-6230-4238-8249-12cec27b4b63", "yg-wong"),
-    "Yumei Feng": ("7bad4cb2-3af1-48cb-85c3-363a4cec3934", None),
+    # Handle resolved from the assignee on Z* PR #123713 -- no self-authored PRs yet.
+    "Yumei Feng": ("7bad4cb2-3af1-48cb-85c3-363a4cec3934", "yumeifeng-design"),
     "Zack Karrasch": ("cee547a3-45bc-410e-9614-9b36e35ee77c", None),
 }
 
