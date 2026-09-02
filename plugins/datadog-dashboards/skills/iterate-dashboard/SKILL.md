@@ -2,6 +2,7 @@
 name: iterate-dashboard
 description: Use when user wants to visually refine, adjust formatting, fix layout, or make targeted changes to an existing Datadog dashboard .dash.json file
 argument-hint: "<path-to.dash.json>"
+allowed-tools: Bash(bash:*), Bash(chart-room:*), Bash(llm:*), Bash(uvx:*), Bash(base64:*), Bash(mkdir:*), Bash(ls:*), Bash(open:*), Bash(cat:*), Read, Write, Edit, Task, AskUserQuestion, Skill
 ---
 
 # Iterating on a Datadog Dashboard
@@ -19,39 +20,62 @@ Gemini-driven visual iteration loop for refining an existing dashboard through a
 - An existing `.dash.json` file (created via `create-dashboard` or `chart-room init`)
 - The dashboard must be initialized in Datadog (`chart-room status <file>` shows linked test dashboard)
 - The bundled `datadog-dashboard-viewer` MCP server (auto-launched by this plugin via `mise x node@22 -- npx -y chrome-devtools-mcp@latest --autoConnect --channel=beta`) — requires Chrome Beta to be running with your Datadog session
-- `uvx llm` with `gemini/gemini-2.5-flash` model configured (or `gemini/gemini-3.1-pro-preview` as alternative)
+- `llm` with the `llm-gemini` plugin and a valid key, exposing `gemini/gemini-2.5-flash` (or `gemini/gemini-3.1-pro-preview`)
+
+You do not verify these by hand — Phase 0 checks and repairs all of them on every run.
 
 ## Workflow
 
 ```
-Phase 0: Prerequisite check (uvx llm models | grep gemini)
+Phase 0: Preflight + self-repair (scripts/preflight.sh --skill iterate)
 Phase 1: Read .dash.json + ensure _meta exists + get user direction
 Phase 2: Session init (mkdir /tmp/dd-eval-{epoch})  ← MUST complete before ANY edits
 Phase 3: Auto-loop:
   3.1  Screenshot via dashboard-browser agent → save to /tmp/dd-eval-{epoch}/screenshot-{N}.png
   3.1b Rendering check — if broken queries/no data → fix .dash.json, re-upload, loop back to 3.1 (don't increment N)
-  3.2  Gemini eval → cat prompt.txt | uvx llm -m gemini/gemini-2.5-flash --no-stream -a screenshot.png > output.txt
+  3.2  Gemini eval → cat prompt.txt | llm -m gemini/gemini-2.5-flash --no-stream -a screenshot.png > output.txt
   3.3  Parse RATING (1-10) + SUGGESTIONS → save to eval-{N}.json
   3.4  If RATING >= 7 OR N >= STOP_LIMIT → exit loop
   3.5  Claude applies Gemini's suggestions to .dash.json
   3.6  chart-room test <file> → loop back to 3.1
 Phase 4: Present final screenshot + rating to user for approval/override
 Phase 5: Generate iteration report playground (HTML)
+Phase 6: Completion ledger (always printed)
 ```
 
-## Phase 0: Prerequisite Check
+## Phase 0: Preflight + Self-Repair — MANDATORY, EVERY INVOCATION
 
-**STOP if this fails.** Run before anything else:
+**This runs automatically, before anything else, on every single invocation — including when `expand-dashboard` just handed off to you. No caching, no "the user already ran it," no skipping because the last run passed.**
+
+!`bash "${CLAUDE_PLUGIN_ROOT}/scripts/preflight.sh" --skill iterate --brief 2>&1 || true`
+
+**The block above already ran.** It is an inline bash block, so Claude Code executed it the moment this skill was invoked — its output is in your context right now, above this line. You do not run it again, and there is no path through this skill where it did not run. That is the point: the check no longer depends on anyone remembering to perform it.
+
+If you see no preflight output above, the injection failed. Run it manually and treat the result exactly the same way:
 
 ```bash
-uvx llm models | grep gemini
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/preflight.sh" --skill iterate --brief
 ```
 
-If no gemini models appear, STOP and tell the user: "Gemini model not configured. Run `uvx llm models` to check available models and configure a Gemini model before proceeding."
+This replaces the old `uvx llm models | grep gemini` check, which only diagnosed. The script repairs: it installs `llm` as a persistent `uv` tool **with the `llm-gemini` plugin and `httpx[socks]`**, plus `mise`, `node@22` and `jq` if they're missing.
 
-Preferred model: `gemini/gemini-2.5-flash` (faster, more reliable). Fallback: `gemini/gemini-3.1-pro-preview`.
+**Why the old check reported failures that weren't real:** `uvx llm` reuses an already-installed `llm` uv tool when one exists, and silently falls back to a bare ephemeral environment when one doesn't — and a bare environment has no plugins, so `gemini/*` models simply do not exist. Which branch you get depends on *which `uv`* is first on PATH. On one machine uv resolved inside a mise-managed Python with its own tool directory, so a correctly configured install with `llm-gemini` and a valid key reported "no Gemini model available" for three months running. The check now asks the `llm` on PATH first and treats `uvx llm` as a fallback only.
 
-Do NOT fall back to self-evaluation. Do NOT skip this check.
+`--skill iterate` additionally makes **one real Gemini API call** as part of preflight. This is the only check that proves the whole path works — plugin installed, key valid and unexpired, network reachable, proxy behaving. Every other check can pass while this fails, and discovering it on iteration 1 wastes a full screenshot round-trip.
+
+`--brief` keeps a healthy machine down to two lines. It does **not** hide problems: on anything other than a clean pass the full repaired / deferred / `USER ACTION REQUIRED` blocks are printed inline, and the complete report is written to a log file whose path comes back as `PREFLIGHT_LOG:`. Drop `--brief` (or `cat` that log) when a check itself is misbehaving.
+
+Act on the machine-readable tail:
+
+- **`PREFLIGHT_STATUS: OK`** → say so in one line, proceed to Phase 1.
+- **`PREFLIGHT_STATUS: REPAIRED`** → **tell the user exactly what was installed on their machine**, then proceed. It is their machine; never modify it silently.
+- **`PREFLIGHT_STATUS: BLOCKED`** → **STOP.** Show the user the `USER ACTION REQUIRED` block verbatim, with its exact fix commands. Do not enter the loop.
+
+Preferred model: `gemini/gemini-2.5-flash`. Fallback: `gemini/gemini-3.1-pro-preview` — preflight reports which one is available.
+
+**Do NOT fall back to self-evaluation. Do NOT skip this check.** If Gemini is unavailable, this skill stops; it does not become a skill where Claude rates its own dashboard. That produces a run that looks successful and is not, which is the one outcome the user cannot detect.
+
+Full rationale: @${CLAUDE_PLUGIN_ROOT}/knowledge/preflight-contract.md
 
 ## Phase 1: Context
 
@@ -100,18 +124,42 @@ The dashboard test URL comes from `chart-room status <file>`.
 
 If the Task agent fails, retry once. If it fails again, STOP and tell the user the screenshot step failed — do NOT fall back to calling `datadog-dashboard-viewer` MCP tools directly.
 
+**If you cannot invoke the agent at all, that is also a STOP.** A host or session constraint can forbid subagents outright — one real run carried a standing "do not call the Task tool unless the user asked for it", which silently nullified the agent this entire loop depends on. Being unable to use a tool is not permission to proceed without it.
+
+Say exactly this to the user and stop: *"iterate-dashboard needs the `dashboard-browser` subagent to screenshot the dashboard, and I can't invoke subagents in this session. Nothing has been evaluated. Either allow subagent use, or run `/iterate-dashboard` in a session that permits it."*
+
+Do not describe what you imagine the dashboard looks like. Do not evaluate it from the JSON.
+
 ### 3.1b Rendering Check
 
-**Before evaluating aesthetics, verify the dashboard actually rendered correctly.** Read the screenshot from 3.1 and check for:
+**Before evaluating aesthetics, verify the dashboard actually rendered correctly.**
 
-- **"No data" widgets** — empty widget bodies, "No data" or "N/A" text
-- **Query errors** — red error banners, "Invalid query" messages, missing metric warnings
-- **Broken template variables** — unresolved `$variable` text visible in widget titles or queries
-- **Empty groups** — group widgets that contain no visible content
+**Do not do this by looking at the screenshot.** Datadog chart canvases paint lazily, so a full-page screenshot routinely comes back **blank or half-blank on a perfectly healthy dashboard**. Reading that as "all my widgets are broken" sends you fixing queries that were never wrong — and the reverse is worse, since a genuinely broken widget can screenshot as an innocuous empty box.
+
+Check the DOM text instead, which is populated whether or not the canvas has painted. Ask the `dashboard-browser` agent to evaluate:
+
+```javascript
+document.body.innerText
+```
+
+and grep the result for the failure strings:
+
+```
+Query Error | Missing base | No data | Invalid query
+```
+
+Then check for:
+
+- **Query errors** — `Query Error`, `Invalid query`, `Missing base` in the page text
+- **"No data" widgets** — `No data` / `N/A` in the page text
+- **Broken template variables** — unresolved `$variable` text in widget titles or queries
+- **Empty groups** — group widgets with no child content in the JSON
+
+Use the screenshot for *aesthetics* in 3.2, where Gemini evaluates layout and hierarchy. Use the DOM text for *correctness* here. They answer different questions and the screenshot is unreliable for this one.
 
 **If any rendering issues are found:**
 
-1. Diagnose the root cause in the .dash.json (wrong metric name, bad query syntax, missing template variable definition, incorrect tag filter)
+1. Diagnose the root cause in the .dash.json (wrong metric name, bad query syntax, missing template variable definition, incorrect tag filter). If the dashboard queries RUM, check @${CLAUDE_PLUGIN_ROOT}/knowledge/rum-widget-landmines.md first — several RUM constructs fail *silently*, which is exactly what an unexplained empty widget looks like.
 2. Fix the .dash.json
 3. Re-upload: `chart-room test <file>`
 4. **Do NOT increment N** — loop back to 3.1 to take a fresh screenshot
@@ -159,10 +207,18 @@ SUGGESTIONS:
 Up to 5 suggestions ordered by impact. If rating >= 7, you may provide 0. Do NOT suggest adding metrics that may not exist — focus on presentation of what is already there.
 PROMPT_EOF
 
-cat "{SESSION_DIR}/prompt-{N}.txt" | uvx llm -m gemini/gemini-2.5-flash --no-stream \
+# Use `llm` directly when it is on PATH — Phase 0's repair installs it there as a
+# persistent uv tool with the gemini plugin. `uvx llm` is only a fallback, and an
+# unreliable one: with no persistent tool installed it silently runs a bare,
+# plugin-less environment in which gemini/* models do not exist.
+LLM_BIN=$(command -v llm >/dev/null 2>&1 && echo llm || echo "uvx llm")
+
+cat "{SESSION_DIR}/prompt-{N}.txt" | $LLM_BIN -m gemini/gemini-2.5-flash --no-stream \
   -a "{SESSION_DIR}/screenshot-{N}.png" \
   > "{SESSION_DIR}/gemini-output-{N}.txt" 2>&1
 ```
+
+If the command exits non-zero or the output file does not contain a `RATING:` line, **STOP and tell the user** — do not rate the dashboard yourself and do not carry on with a guessed rating.
 
 Then read the output file:
 
@@ -225,9 +281,15 @@ Increment `N` and loop back to 3.1.
    - **Override direction** — provide new change direction and re-enter Phase 3
    - **Continue iterating** — reset N and keep looping with current direction
 
-## Phase 5: Iteration Report Playground
+## Phase 5: Iteration Report Playground — REQUIRED, NOT OPTIONAL
 
-After the user accepts the final result, generate a single-file HTML playground that documents the full iteration history. Save it to `{SESSION_DIR}/iteration-report.html` and open it with `open`.
+**This phase has been silently dropped in a real run. It is deliverable work, not a nicety.**
+
+After the user accepts the final result, generate a single-file HTML playground that documents the full iteration history. Save it to `{SESSION_DIR}/iteration-report.html`, open it with `open`, and **give the user the path**.
+
+The report is the only durable record of what changed and why — the session directory is in `/tmp` and the Gemini evaluations exist nowhere else. Without it the user has a dashboard and no account of how it got there.
+
+**The only way to skip this phase is if the user explicitly says to skip it.** Record that as `SKIPPED` in the ledger with their reason. Running out of context, judging it unnecessary, or "the dashboard is done anyway" are **not** reasons; if you cannot produce it, mark it `FAILED` with the reason and tell the user where the raw `eval-{N}.json` and screenshots are so nothing is lost.
 
 ### Data to embed
 
@@ -315,6 +377,27 @@ function render() {
 }
 ```
 
+## Phase 6: Completion Ledger — ALWAYS PRINT
+
+Before you finish, print this table. Fill `Status` with `DONE`, `SKIPPED`, or `FAILED`, checked against what you **actually did**, not what you intended to do.
+
+```
+| Phase | Status | Notes |
+|---|---|---|
+| 0. Preflight            |  | e.g. "REPAIRED — installed llm-gemini" |
+| 1. Context + direction  |  | |
+| 2. Session init         |  | session dir path |
+| 3. Gemini auto-loop     |  | N iterations, ratings X → Y |
+| 4. User approval        |  | |
+| 5. Iteration report     |  | path to iteration-report.html |
+```
+
+For Phase 3, state the iteration count and every rating in sequence. A loop that exited at `STOP_LIMIT` without reaching 7 is **not** a pass — say so explicitly, and say the final rating.
+
+**Every `SKIPPED` or `FAILED` row must carry a reason in Notes, and must also be restated in prose below the table** — a user skimming past a markdown table still has to see it. Say what they should do about each.
+
+Skipping a phase is allowed. Skipping it without telling anyone is not.
+
 ## Common Iteration Patterns
 
 | User Request           | Typical Changes                                                    |
@@ -328,6 +411,8 @@ function render() {
 
 ## Guidelines
 
+- **Preflight runs every invocation** — even on handoff from `expand-dashboard`, and its result goes to the user
+- **Never silently skip or degrade** — a skipped phase, a failed dependency, or a substituted evaluator is reported the moment it happens; print the Phase 6 ledger regardless
 - **Apply all Gemini suggestions per iteration** — Gemini evaluates holistically, so its suggestions form a coherent set
 - **Always screenshot after upload** — don't assume the change looks right
 - **Preserve \_meta** — never remove or modify `_meta.intent` or `_meta.audience` during iteration

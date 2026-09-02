@@ -2,6 +2,7 @@
 name: expand-dashboard
 description: Use when user wants to add new metrics, widgets, or sections to an existing Datadog dashboard
 argument-hint: "<path-to.dash.json>"
+allowed-tools: Bash(bash:*), Bash(chart-room:*), Bash(curl:*), Bash(jq:*), Bash(gh:*), Read, Write, Edit, Grep, Glob, AskUserQuestion, Skill
 ---
 
 # Expanding a Datadog Dashboard
@@ -22,10 +23,40 @@ Add new metrics and content to an existing dashboard: find the gap, instrument t
 ## Workflow
 
 ```
-Read _meta → Gap analysis → Instrument code → Test emission → PR metrics → Update .dash.json → Iterate visuals
+Preflight → Read _meta → Gap analysis → Instrument code → Test emission → PR metrics → Update .dash.json → Iterate visuals → Ledger
 ```
 
 **CRITICAL: Read `_meta.intent`, `_meta.audience`, and `_meta.scope` from the .dash.json BEFORE starting. The intent defines what metrics matter. The audience defines how they should be presented. The scope identifies which services and integrations are available.**
+
+## Phase 0: Preflight — MANDATORY, EVERY INVOCATION
+
+**This runs automatically, before Phase 1, on every single invocation — including when `create-dashboard` just handed off to you. The handoff is not a substitute: the machine can change between phases, and `create`'s preflight ran with `--skill create`, which treats the Datadog credentials this skill needs as deferred rather than blocking.**
+
+!`bash "${CLAUDE_PLUGIN_ROOT}/scripts/preflight.sh" --skill expand --brief 2>&1 || true`
+
+**The block above already ran.** It is an inline bash block, so Claude Code executed it the moment this skill was invoked — its output is in your context right now, above this line. You do not run it again, and there is no path through this skill where it did not run. That is the point: the check no longer depends on anyone remembering to perform it.
+
+If you see no preflight output above, the injection failed. Run it manually and treat the result exactly the same way:
+
+```bash
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/preflight.sh" --skill expand --brief
+```
+
+`--brief` keeps a healthy machine down to two lines. It does **not** hide problems: on anything other than a clean pass the full repaired / deferred / `USER ACTION REQUIRED` blocks are printed inline, and the complete report is written to a log file whose path comes back as `PREFLIGHT_LOG:`. Drop `--brief` (or `cat` that log) when a check itself is misbehaving.
+
+Act on the machine-readable tail:
+
+- **`PREFLIGHT_STATUS: OK`** → say so in one line, proceed to Phase 1.
+- **`PREFLIGHT_STATUS: REPAIRED`** → **tell the user exactly what was installed on their machine**, then proceed.
+- **`PREFLIGHT_STATUS: BLOCKED`** → **STOP.** Show the user the `USER ACTION REQUIRED` block verbatim. Do not start the gap analysis.
+
+This skill's hard dependencies are `DD_API_KEY` / `DD_APP_KEY` (the metric search in Phase 1 is meaningless without them) and `chart-room` (Phase 5 uploads through it). The preflight validates the Datadog keys with a live call rather than just checking they are set — a revoked key that is still exported produces empty metric searches that read exactly like "this metric does not exist", which sends the whole gap analysis down the wrong path.
+
+If `PREFLIGHT_DEFERRED > 0`, tell the user now which dependency `iterate-dashboard` will hit at the Phase 6 handoff.
+
+**Never substitute your own judgement for a missing dependency.** Do not guess whether a metric exists because the search is unavailable.
+
+Full rationale: @${CLAUDE_PLUGIN_ROOT}/knowledge/preflight-contract.md
 
 ## Phase 1: Gap Analysis
 
@@ -103,17 +134,43 @@ Once metrics are confirmed emitting:
 
 1. **Add new widgets** to the .dash.json for the new metrics
 2. **Choose widget types** — refer to @${CLAUDE_PLUGIN_ROOT}/knowledge/widget-selection-guide.md
+   - **If any query is a RUM event query, read @${CLAUDE_PLUGIN_ROOT}/knowledge/rum-widget-landmines.md first.** Several RUM constructs upload without complaint and then fail at render, `timeshift()` silently. Getting these wrong costs an upload → screenshot → diagnose cycle each.
 3. **Use correct query format** — refer to @${CLAUDE_PLUGIN_ROOT}/knowledge/dashboard-json-reference.md
 4. **Place widgets** in the appropriate group/section, or create new groups if needed
 5. **Upload** with `chart-room test <file>`
 
-## Phase 6: Handoff to Iterate
+## Phase 6: Handoff to Iterate — REQUIRED, NOT OPTIONAL
 
-Invoke the `iterate-dashboard` skill to visually refine the newly added widgets. The user will drive the visual iteration from here.
+1. **State the handoff** — tell the user you are moving from `expand-dashboard` to `iterate-dashboard`, and on which file.
+2. **Invoke the `iterate-dashboard` skill** with the `.dash.json` path as its argument. Actually invoke it — do not describe what it would do and stop.
+
+Widgets that have never been looked at are widgets nobody has confirmed render. **The only way to skip this phase is if the user explicitly says to stop** — record that as `SKIPPED` in the ledger with their reason. Running out of context, hitting an unrelated error, or judging it unnecessary are **not** reasons to skip it; mark it `FAILED` with the reason and say so.
+
+## Phase 7: Completion Ledger — ALWAYS PRINT
+
+Before you finish, print this table. Fill `Status` with `DONE`, `SKIPPED`, or `FAILED`, checked against what you **actually did**.
+
+```
+| Phase | Status | Notes |
+|---|---|---|
+| 0. Preflight            |  | |
+| 1. Gap analysis         |  | |
+| 2. Instrument code      |  | |
+| 3. Test metric emission |  | |
+| 4. PR metric changes    |  | |
+| 5. Update dashboard JSON |  | |
+| 6. Handoff to iterate   |  | |
+```
+
+Phases 2–4 are legitimately `SKIPPED` when the gap needs no new metrics — say so in Notes ("all required metrics already emitting"). That is a real answer; an empty row is not.
+
+**Every `SKIPPED` or `FAILED` row must carry a reason and must also be restated in prose below the table**, with what the user should do about it.
 
 ## Guidelines
 
+- **Preflight runs every invocation** — even on handoff from `create-dashboard`, and its result goes to the user
 - **Verify metrics exist in Datadog before adding widgets that reference them**
+- **Never silently skip or degrade** — a skipped phase, a failed dependency, or a substituted approach is reported the moment it happens; print the Phase 7 ledger regardless
 - **Metrics PR first, dashboard changes second** — never merge dashboard widgets referencing metrics that don't exist yet
 - **Preserve \_meta** — never remove or modify `_meta.intent` or `_meta.audience`
 - **One concern per PR** — metric instrumentation in one PR, dashboard JSON updates separately

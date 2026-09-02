@@ -2,6 +2,13 @@
 
 Decision matrix for choosing the right Datadog widget type based on data characteristics.
 
+## RUM widgets — read this first
+
+If the widget queries RUM events, see @${CLAUDE_PLUGIN_ROOT}/knowledge/rum-widget-landmines.md
+before choosing a type. Several RUM constructs upload cleanly and then fail at render —
+`timeshift()` most importantly, which produces an empty widget with no error at all. The
+guide below assumes those constraints are already respected.
+
 ## Decision Flowchart
 
 ```

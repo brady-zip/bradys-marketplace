@@ -1,5 +1,5 @@
 {
-  "chrome-browser-tools": {
+  "datadog-dashboard-viewer": {
     "command": "mise",
     "args": [
       "x",
