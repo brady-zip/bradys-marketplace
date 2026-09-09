@@ -53,13 +53,23 @@ mem0_scope_source_env() {
     set +a
   fi
 
-  # Under an external stack, drive mem0 through the MCP server rather than an
-  # in-process client: the server already holds the Qdrant URL, collection,
-  # user_id and API key, and is long-lived, so a hook neither duplicates that
-  # config on the host nor pays a cold Memory init per process. The fork reads
-  # MEM0_MCP_URL; the plugin stores it under its own namespaced key.
-  # Managed stacks stay on the direct client — unchanged behaviour.
-  if [ "${MEM0_BRADY_STACK:-managed}" = "external" ] && [ -n "${MEM0_BRADY_MCP_URL:-}" ]; then
+  # Unless this host runs mem0 in-process, drive it through the MCP server: the
+  # server already holds the Qdrant URL, collection, user_id and API key, and is
+  # long-lived, so a hook neither duplicates that config on the host nor pays a
+  # cold Memory init per process. The fork reads MEM0_MCP_URL; the plugin stores
+  # it under its own namespaced key.
+  #
+  # The test is "not managed", NOT a list of MCP stacks, because managed is the
+  # only stack setup.sh installs mem0 for — compose and external both take the
+  # MCP_MODE branch and leave the host without the library. Naming the MCP
+  # stacks here instead is what broke a compose install: the bridge said
+  # `= external`, so a compose host exported no MEM0_MCP_URL, hooks.py fell back
+  # to an in-process client, and constructing it raised ModuleNotFoundError on
+  # the first call of every hook. Each one fails open, so capture, recall and
+  # the workstream handoff all stopped at once — with no error anywhere, and
+  # doctor still reporting "capture ON". Anything that is not managed must
+  # bridge, including a stack mode added after this line was written.
+  if [ "${MEM0_BRADY_STACK:-managed}" != "managed" ] && [ -n "${MEM0_BRADY_MCP_URL:-}" ]; then
     export MEM0_MCP_URL="$MEM0_BRADY_MCP_URL"
   fi
 

@@ -90,6 +90,11 @@ esac
 # because the storage check needs it even when docker is down.
 COMPOSE_PROJECT="$(env_get MEM0_BRADY_COMPOSE_PROJECT)"; COMPOSE_PROJECT="${COMPOSE_PROJECT:-mem0-host}"
 
+# The wrappers' own environment builder. Two sections run it rather than
+# restating what it does: the capture-policy client check (which client the
+# hooks end up with is decided by the MEM0_MCP_URL bridge in here) and Scopes.
+SCOPE_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/../hooks" 2>/dev/null && pwd)/lib-scope.sh"
+
 print_header() { printf "\n${BOLD}%s${NC}\n" "$1"; printf '%s\n' "------------------------------------------------------------"; }
 pass() { printf "  ${GREEN}OK${NC}      %s\n" "$1"; }
 fail_required() { printf "  ${RED}MISSING${NC} %s\n" "$1"; REQUIRED_FAILED=$((REQUIRED_FAILED + 1)); [ -n "${2:-}" ] && printf "          ${BLUE}Fix:${NC} %s\n" "$2"; return 0; }
@@ -214,6 +219,47 @@ for label, on, var in (
     else
       fail_optional "could not resolve capture policy from the installed hooks" \
         "Reinstall: uv tool install --force <plugin>/server"
+    fi
+
+    # The policy above says what the hooks would do; this says whether they CAN.
+    # Every hook's first act is _get_client(), which prefers the MCP server when
+    # MEM0_MCP_URL is set and otherwise builds an in-process mem0 — a library
+    # only a managed install ships. Get that pairing wrong (a non-managed stack
+    # that never bridges the URL) and every hook raises on its first call and
+    # fails open into silence, which from outside is indistinguishable from the
+    # "capture ON" printed directly above. A compose install shipped in exactly
+    # that state for a month without a single visible symptom, which is the
+    # whole reason this check exists.
+    #
+    # Resolved through lib-scope.sh — the same bridge the wrappers run, not a
+    # second copy of its rule — under the interpreter the hooks use, in a
+    # subshell so sourcing the config does not leak OPENAI_API_KEY into doctor's
+    # other children. A lib that cannot be sourced bails with no output (the
+    # empty case warns) rather than reporting the "no client" verdict it did not
+    # actually establish. Cheap enough to run every time: get_client() only
+    # reads env, and find_spec locates mem0 without importing it.
+    if [ -f "$SCOPE_LIB" ]; then
+      CLIENT="$(
+        # shellcheck disable=SC1090
+        . "$SCOPE_LIB" 2>/dev/null || exit 0
+        mem0_scope_source_env 2>/dev/null || exit 0
+        "$HOOK_PY" -c 'import importlib.util, os
+from mem0_mcp_selfhosted.mcp_client import get_client
+if get_client() is not None:
+    print("MCP server at " + os.environ.get("MEM0_MCP_URL", ""))
+elif importlib.util.find_spec("mem0") is not None:
+    print("in-process mem0")
+else:
+    print("NONE")' 2>/dev/null
+      )"
+      case "$CLIENT" in
+        NONE)
+          fail_required "the hooks can reach no mem0 at all — no MEM0_MCP_URL bridged and no mem0 installed on this host" \
+            "MEM0_BRADY_STACK=${STACK} drives mem0 over MCP, so set MEM0_BRADY_MCP_URL in ${ENV_FILE} and re-run /mem0-brady:setup." ;;
+        "") fail_optional "could not resolve which mem0 client the hooks would use" \
+              "Reinstall: uv tool install --force <plugin>/server" ;;
+        *)  pass "hook memory client: ${CLIENT}" ;;
+      esac
     fi
   fi
 else
@@ -437,7 +483,6 @@ print_header "Scopes (optional)"
 # property of where a session runs, not of the install. Full inventory (which
 # partitions actually hold memories) is /mem0-brady:scopes; this only checks
 # that resolution works and that the config is not silently mangled.
-SCOPE_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/../hooks" 2>/dev/null && pwd)/lib-scope.sh"
 if [ ! -f "$SCOPE_LIB" ]; then
   fail_optional "scope resolver missing at ${SCOPE_LIB}" "Reinstall the plugin."
 else

@@ -41,26 +41,34 @@ Mem0 does **both** kinds of memory here:
 (This replaced a Honcho-based passive layer — Mem0 now owns the implicit capture too.)
 
 Under the default **managed** stack everything runs locally with no Docker: a native Qdrant
-server binary and the MCP server, both under launchd. If you already run Qdrant and the MCP
-server yourself, choose the **external** stack instead and the plugin installs neither.
+server binary and the MCP server, both under launchd. **compose** runs the same two things in
+Docker, built from the vendored server (see `stack/README.md`). If you already run Qdrant and
+the MCP server yourself, choose **external** and the plugin installs neither.
 
-## Stacks: managed vs external
+## Stacks: managed, compose, external
 
 `MEM0_BRADY_STACK` in `~/.config/mem0-brady/.env` decides how much of the stack the plugin owns.
 
-| | `managed` (default) | `external` |
-|---|---|---|
-| Qdrant | native binary under launchd, ports from config (default `6433`/`6434`) | yours, never contacted from the host |
-| MCP server | launchd, port from config (default `8788`) | yours |
-| how hooks reach mem0 | in-process (`mem0.Memory`) | through the MCP server |
-| setup installs | console scripts + mem0 + models, Qdrant binary, 2 launchd agents | an MCP client and a two-line config |
-| host needs an API key | yes | **no** — the server holds it |
-| install size | multi-GB (mem0ai, torch, spaCy, fastembed) | ~70MB |
+| | `managed` (default) | `compose` | `external` |
+|---|---|---|---|
+| Qdrant | native binary under launchd, ports from config (default `6433`/`6434`) | container, built and run from `stack/` | yours, never contacted from the host |
+| MCP server | launchd, port from config (default `8788`) | container, built from `../server` | yours |
+| how hooks reach mem0 | in-process (`mem0.Memory`) | through the MCP server | through the MCP server |
+| setup installs | console scripts + mem0 + models, Qdrant binary, 2 launchd agents | console scripts + an MCP client, then builds the stack | an MCP client and a two-line config |
+| host needs an API key | yes | **no** — the server holds it | **no** — the server holds it |
+| install size | multi-GB (mem0ai, torch, spaCy, fastembed) | ~70MB on the host (the rest is in the image) | ~70MB |
 
-On `external`, the hooks drive mem0 **through the server**, so the server owns the Qdrant URL,
-the collection, the `user_id`, the embedding model and the API key. None of them are configured
+The dividing line is the **hooks** row, not Docker: `managed` is the only stack whose host
+installs mem0 at all, so it is the only one where a hook builds an in-process client. On both
+of the others the hooks drive mem0 **through the server**, which owns the Qdrant URL, the
+collection, the `user_id`, the embedding model and the API key. None of them are configured
 on the host — a duplicate would just be a second copy to keep in sync, and a stale one fails
-by quietly reading a different store. The whole config is:
+by quietly reading a different store. What routes a hook to the server is
+`MEM0_BRADY_MCP_URL`, which `hooks/lib-scope.sh` bridges to the `MEM0_MCP_URL` the fork reads;
+without it a non-managed host reaches for a mem0 it does not have, and every hook fails open
+into silence. `/mem0-brady:doctor` reports which client the hooks resolve, for that reason.
+
+An `external` config is the whole thing:
 
 ```
 MEM0_BRADY_STACK=external
@@ -71,8 +79,9 @@ Hooks fail **open**: a slow or unreachable server skips recall/capture and lets 
 continue, rather than blocking it.
 
 Moving between stacks — or merging a second machine's memories into one shared store — is
-`/mem0-brady:migrate`. Setup refuses to switch an install to `external` while managed-stack
-data is still sitting there unmigrated.
+`/mem0-brady:migrate`. Setup refuses to switch an install off `managed` while managed-stack
+data is still sitting there unmigrated — `compose` strands it on its own Qdrant just as
+surely as `external` does.
 
 ## Memory model: one store, four scopes
 
