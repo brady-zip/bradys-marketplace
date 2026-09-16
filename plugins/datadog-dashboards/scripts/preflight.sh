@@ -74,9 +74,13 @@
 #              cost three lines of context rather than forty. On anything other
 #              than a clean pass the summary still carries the complete USER
 #              ACTION REQUIRED / repaired / deferred blocks -- the detail that gets
-#              elided is the list of things that went fine. The log path is printed
-#              (as PREFLIGHT_LOG:) whenever the status is not OK, so the full
-#              output is one `cat` away when a check misbehaves.
+#              elided is the list of things that went fine. "A clean pass" means
+#              no blockers AND no deferrals: a deferral is what the NEXT skill in
+#              the chain walks into, and the contract requires the caller to warn
+#              about it now, which it cannot do if this mode threw it away. The
+#              log path is printed (as PREFLIGHT_LOG:) whenever anything at all
+#              was reported, so the full output is one `cat` away when a check
+#              misbehaves.
 #
 #   --skill    Which skill is about to run. Decides which failures BLOCK now and
 #              which are merely DEFERRED warnings. `create` doesn't need Chrome
@@ -149,12 +153,24 @@ if [ "$BRIEF" = 1 ] && [ -z "${DD_DASH_PREFLIGHT_INNER:-}" ]; then
   # Read the machine-readable tail out of the log before deciding what to keep.
   TAIL_BLOCK="$(grep '^PREFLIGHT_' "$LOG" 2>/dev/null)"
   STATUS="$(printf '%s\n' "$TAIL_BLOCK" | sed -n 's/^PREFLIGHT_STATUS: //p' | tail -1)"
-  N_PASSED="$(grep -c '^  OK ' "$LOG" 2>/dev/null || echo 0)"
+  N_DEFER="$(printf '%s\n' "$TAIL_BLOCK" | sed -n 's/^PREFLIGHT_DEFERRED: //p' | tail -1)"
+  # `grep -c` PRINTS 0 and EXITS 1 when there are no matches, so `|| echo 0`
+  # appends a second line and the count comes out as "0\n0". Swallow the exit
+  # status instead of branching on it.
+  N_PASSED="$(grep -c '^  OK ' "$LOG" 2>/dev/null)" || true
+  [ -n "$N_PASSED" ] || N_PASSED=0
 
   printf 'datadog-dashboards preflight (skill=%s): %s -- %s checks passed\n' \
     "$SKILL" "${STATUS:-UNKNOWN}" "$N_PASSED"
 
-  if [ "${STATUS:-UNKNOWN}" = "OK" ] && [ "${DD_DASH_PREFLIGHT_KEEP_LOG:-0}" != "1" ]; then
+  # STATUS is OK when nothing BLOCKS *this* skill -- which says nothing about
+  # deferrals, and deferrals are precisely what the next skill in the chain walks
+  # into. Eliding them on an OK run (and deleting the log that held them) meant
+  # the contract's "if PREFLIGHT_DEFERRED > 0, warn the user now" was unfollowable
+  # in the only mode the skills actually invoke. So a deferral keeps the detail
+  # and keeps the log, even though the status stays OK.
+  if [ "${STATUS:-UNKNOWN}" = "OK" ] && [ "${N_DEFER:-0}" = "0" ] \
+     && [ "${DD_DASH_PREFLIGHT_KEEP_LOG:-0}" != "1" ]; then
     # Nothing to investigate, so leave no file behind to go stale. Set
     # DD_DASH_PREFLIGHT_KEEP_LOG=1 to retain it anyway -- CI wants an artifact
     # proving the green run happened, and a deleted log cannot be attached to a
@@ -296,6 +312,27 @@ fi
 print_header "llm + llm-gemini (dashboard evaluation)"
 LLM_BIN=""
 if have uv; then
+  # A `uv tool install --force` that was interrupted leaves the venv working but
+  # its receipt (uv-receipt.toml) absent, and from then on every uv invocation
+  # prints
+  #
+  #     warning: Ignoring malformed tool `llm` (run `uv tool uninstall llm` to remove)
+  #
+  # while `uv tool list` omits llm entirely. The venv itself is fine -- `llm` on
+  # PATH works, the gemini plugin is there, live calls succeed -- so the only
+  # real consequence is that uv's own bookkeeping (list, upgrade) can't see it.
+  #
+  # DELIBERATELY NOT AUTO-REPAIRED, despite rule 2. The fix is uninstall +
+  # reinstall, and `uv tool install llm --force --with llm-gemini` rebuilds the
+  # venv with *only* what that command names -- silently discarding any other
+  # llm plugin the user installed themselves. Trading someone's llm-claude or
+  # llm-ollama for a cosmetic warning on a working install is not a repair this
+  # script gets to make unasked. Surface it, name the cost, let them decide.
+  if run_with_timeout 30 sh -c "uv tool list 2>&1 | grep -q 'malformed tool .llm'"; then
+    deferred "uv reports a malformed 'llm' tool entry (the install itself works)" \
+      "Cosmetic: uv's bookkeeping lost track of llm, but the venv is intact and nothing here is blocked by it. To clean it up: uv tool uninstall llm && uv tool install llm --with llm-gemini --with 'httpx[socks]' -- and re-add any OTHER llm plugins you had, because that rebuilds the environment from scratch."
+  fi
+
   if have llm && run_with_timeout 30 llm --version >/dev/null 2>&1; then
     LLM_BIN="llm"
   elif have uvx && run_with_timeout "$TIMEOUT" uvx llm --version >/dev/null 2>&1; then
@@ -371,13 +408,53 @@ fi
 # Only meaningful when the user is actually behind a SOCKS proxy. When they are,
 # a missing socksio makes every llm call fail with an error that names socksio,
 # not the proxy, and sends people hunting the wrong thing.
+#
+# THE PROBE ITSELF WAS THE BUG, TWICE OVER. It used to be:
+#
+#     $LLM_BIN python -c 'import socksio'
+#
+# `llm python` is not a subcommand (llm 0.35 falls through to `llm prompt` and
+# dies with "Got unexpected extra argument"), so the probe failed identically
+# whether socksio was installed or not -- permanently BLOCKING `--skill iterate`
+# for every user behind a SOCKS proxy, on machines where the real Gemini call
+# went through the proxy fine. That is Failure A from the contract doc with a new
+# costume on: the machine was healthy and the question was wrong.
+#
+# So ask the interpreter that actually runs llm. The `llm` shim is a venv console
+# script whose shebang names that interpreter; importing there is the same import
+# the real call performs. And when we cannot resolve one -- `uvx llm` has no
+# stable shim, and an ephemeral env is a different environment anyway -- we say
+# UNKNOWN rather than guessing. An unanswerable question is not a failed
+# dependency, and the Gemini smoke call below is strictly better evidence.
+llm_venv_python() {
+  local shim py
+  shim="$(command -v llm 2>/dev/null)" || return 1
+  [ -n "$shim" ] && [ -f "$shim" ] || return 1
+  py="$(sed -n '1s|^#!\([^ ]*\).*|\1|p' "$shim" 2>/dev/null)"
+  [ -n "$py" ] && [ -x "$py" ] || return 1
+  printf '%s' "$py"
+}
+
+# 0 = importable, 1 = definitively missing, 2 = could not ask
+socksio_state() {
+  local py
+  py="$(llm_venv_python)" || return 2
+  run_with_timeout 30 "$py" -c 'import socksio' >/dev/null 2>&1 && return 0
+  return 1
+}
+
 SOCKS_PROXY="${ALL_PROXY:-${all_proxy:-}}"
 if [ -n "$SOCKS_PROXY" ] && printf '%s' "$SOCKS_PROXY" | grep -qiE '^socks[0-9a-z]*://'; then
   print_header "SOCKS proxy compatibility"
-  if [ -n "$LLM_BIN" ] && run_with_timeout "$TIMEOUT" sh -c "$LLM_BIN python -c 'import socksio'" >/dev/null 2>&1; then
+  socksio_state; SOCKSIO=$?
+  if [ "$SOCKSIO" -eq 0 ]; then
     ok "SOCKS proxy in use and socksio is importable by llm"
+  elif [ "$SOCKSIO" -eq 2 ]; then
+    deferred "SOCKS proxy set; could not determine whether llm has the socks extra" \
+      "Not a failure -- there is no resolvable llm venv to ask (usually means llm runs via 'uvx llm'). The live Gemini call below is the real test. To remove the doubt: uv tool install llm --force --with llm-gemini --with 'httpx[socks]'"
   elif [ "$REPAIR" = 1 ] && have uv; then
-    if run_with_timeout "$TIMEOUT" uv tool install llm --force --with llm-gemini --with 'httpx[socks]' >/dev/null 2>&1; then
+    if run_with_timeout "$TIMEOUT" uv tool install llm --force --with llm-gemini --with 'httpx[socks]' >/dev/null 2>&1 \
+       && { PATH="$HOME/.local/bin:$PATH"; export PATH; socksio_state; [ $? -eq 0 ]; }; then
       repaired "reinstalled llm with httpx[socks] for SOCKS proxy ${SOCKS_PROXY}"
     else
       needed_by "iterate" "SOCKS proxy set but llm lacks the socks extra" \
@@ -507,12 +584,123 @@ fi
 # --autoConnect attaches to a Chrome that is ALREADY running with the user's
 # Datadog session. Not running means the screenshot step fails with a connection
 # error that says nothing about "launch your browser".
-if pgrep -f "Google Chrome Beta" >/dev/null 2>&1; then
-  ok "Chrome Beta is running (--autoConnect has something to attach to)"
-else
-  needed_by "iterate" "Chrome Beta is not running" \
-    "Launch Chrome Beta and sign in to Datadog before iterating. The MCP uses --autoConnect and attaches to a running instance; it will not start one for you."
-fi
+#
+# ASKING THE PROCESS TABLE DOES NOT WORK HERE. This used to be a bare
+# `pgrep -f "Google Chrome Beta"`, and inside Claude Code's sandboxed Bash the
+# process table is simply not readable:
+#
+#     sysmon request failed with error: sysmond service not found
+#     pgrep: Cannot get process list
+#
+# pgrep exits 3 (fatal error), `ps -axo comm=` returns zero lines, and
+# `osascript` fails with -10810. The old test read all of that as "not running"
+# and BLOCKED iterate on machines where Chrome Beta was running and signed in --
+# and preflight runs from exactly that sandboxed Bash on every skill invocation,
+# so this fired essentially always. Failure A again.
+#
+# Four probes, most trustworthy first, and pgrep demoted to last because it is
+# the one that lies. Anything that cannot answer yields UNKNOWN, which warns
+# instead of blocking: an unanswerable question is not a failed dependency.
+#
+# The ordering is not "cheapest first" -- it is "least able to be wrong first",
+# and the two are not the same here. curl looks like the obvious CDP test and is
+# in fact the weakest of the four, because in a sandboxed Bash it returns rc=0
+# with a zero-byte body whether or not anything is there. Trusting its exit
+# status would report Chrome running having learned nothing, which is a FALSE
+# POSITIVE -- strictly worse than the false negative this all started as, because
+# the run then proceeds and screenshots nothing.
+#
+# CHROME_EVIDENCE records which probe answered, because they do not all prove the
+# same thing: only the CDP ones show the debugging endpoint --autoConnect needs.
+# A singleton socket proves Chrome Beta is *alive*, not that it is *attachable*.
+#
+# 0 = running, 1 = definitively not running, 2 = could not tell
+CDP_PORT="${DD_DASH_CDP_PORT:-9222}"
+CHROME_EVIDENCE=""
+chrome_beta_state() {
+  # 1. STRONGEST. lsof reads its own file descriptors rather than the sysmon
+  #    process list, so it survives the sandbox, and it answers both questions at
+  #    once: is anything listening on the CDP port, and is that thing Beta.
+  #
+  #    `+c 0` is required. Default lsof truncates COMMAND to 9 characters, so
+  #    Chrome Beta and stable Chrome both render as "Google" and the channel --
+  #    the entire point of --channel=beta -- becomes unreadable. With +c 0 it
+  #    prints in full, spaces escaped as \x20, hence the `Chrome.*Beta` match
+  #    rather than a literal space.
+  #
+  #    A listener that is NOT Beta means someone else holds the port; that is not
+  #    evidence either way about Beta, so fall through rather than concluding.
+  if have lsof && run_with_timeout 15 sh -c \
+       "lsof +c 0 -nP -iTCP:${CDP_PORT} -sTCP:LISTEN 2>/dev/null | grep -qi 'Chrome.*Beta'" ; then
+    CHROME_EVIDENCE="CDP listener on port ${CDP_PORT} belongs to Chrome Beta"
+    return 0
+  fi
+
+  # 2. Chrome's own singleton lock, read straight off the Beta profile. A plain
+  #    file read, so it works where the process table does not, and reading the
+  #    Beta profile specifically is what keeps stable Chrome from answering for
+  #    it. The symlink can outlive a crash, but its target lives in the per-boot
+  #    TMPDIR and goes away with the process, so require the target to exist.
+  #
+  #    Proves liveness, NOT attachability: this is equally true of a Chrome Beta
+  #    started with no debugging endpoint, which is precisely the case
+  #    --autoConnect fails on. So it answers "running", and CHROME_EVIDENCE says
+  #    the attach was not verified.
+  local prof sock
+  for prof in "$HOME/Library/Application Support/Google/Chrome Beta" \
+              "$HOME/.config/google-chrome-beta"; do
+    sock="$(readlink "$prof/SingletonSocket" 2>/dev/null)"
+    if [ -n "$sock" ] && [ -e "$sock" ]; then
+      CHROME_EVIDENCE="Chrome Beta profile singleton socket is live (CDP attach not verified)"
+      return 0
+    fi
+  done
+
+  # 3. curl, and ONLY on a parseable body. rc is worthless: a sandboxed Bash
+  #    returns rc=0 with zero bytes whether or not the port is open, and Chrome
+  #    serves /json/* only when started with an HTTP debugging endpoint -- a 404
+  #    from a real Chrome and an empty reply from nothing look the same through
+  #    the exit status. Requiring the JSON body means a positive here is a
+  #    positive.
+  #
+  #    --noproxy is kept because curl honours ALL_PROXY for 127.0.0.1 too, so on
+  #    a machine behind a SOCKS proxy without localhost in no_proxy every
+  #    loopback probe gets swallowed and reads as "nothing is listening". Where
+  #    no_proxy already covers localhost it is simply a no-op.
+  if have curl; then
+    local body
+    body="$(run_with_timeout 15 curl -s --noproxy '*' --max-time 5 \
+              "http://127.0.0.1:${CDP_PORT}/json/version" 2>/dev/null)"
+    if printf '%s' "$body" | grep -q 'webSocketDebuggerUrl\|"Browser"'; then
+      CHROME_EVIDENCE="CDP endpoint on port ${CDP_PORT} answered /json/version"
+      return 0
+    fi
+  fi
+
+  # 4. pgrep last, and only believed when it actually ran. Exit 1 means "ran
+  #    fine, matched nothing"; anything else (3 in the sandbox) means it could
+  #    not look, which is not the same answer.
+  if have pgrep; then
+    local err rc
+    err="$(pgrep -f "Google Chrome Beta" 2>&1 >/dev/null)"; rc=$?
+    if [ "$rc" -eq 0 ]; then
+      CHROME_EVIDENCE="a Chrome Beta process is running (CDP attach not verified)"
+      return 0
+    fi
+    [ "$rc" -eq 1 ] && [ -z "$err" ] && return 1
+  fi
+
+  return 2
+}
+
+chrome_beta_state; CHROME_STATE=$?
+case "$CHROME_STATE" in
+  0) ok "Chrome Beta is running -- ${CHROME_EVIDENCE}" ;;
+  1) needed_by "iterate" "Chrome Beta is not running" \
+       "Launch Chrome Beta and sign in to Datadog before iterating. The MCP uses --autoConnect and attaches to a running instance; it will not start one for you." ;;
+  *) deferred "could not determine whether Chrome Beta is running" \
+       "Nothing is known to be broken -- this environment cannot read the process table and nothing is listening on CDP port ${CDP_PORT}. Make sure Chrome Beta is open and signed in to Datadog before iterating; the screenshot agent will report clearly if it cannot attach." ;;
+esac
 
 # --- Shell helpers ------------------------------------------------------------
 print_header "Shell helpers"
@@ -542,17 +730,17 @@ STATUS="OK"
 
 if [ "$N_REPAIRED" -gt 0 ]; then
   printf "${GREEN}${BOLD}Repaired automatically:${NC}\n"
-  printf "$REPAIRS"
+  printf '%b' "$REPAIRS"
   printf '\n'
 fi
 if [ "$N_DEFERRED" -gt 0 ]; then
   printf "${YELLOW}${BOLD}Not needed yet, but will be:${NC}\n"
-  printf "$DEFERRALS"
+  printf '%b' "$DEFERRALS"
   printf '\n'
 fi
 if [ "$N_BLOCKED" -gt 0 ]; then
   printf "${RED}${BOLD}USER ACTION REQUIRED -- cannot proceed:${NC}\n"
-  printf "$BLOCKERS"
+  printf '%b' "$BLOCKERS"
   printf "${RED}These need a human. Run the fixes above, then re-run preflight.${NC}\n"
   printf '\n'
 else

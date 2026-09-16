@@ -43,9 +43,17 @@ the model can actually read out to the user.
 
 `--brief` exists so that paying this cost on every run is actually affordable in context: a
 healthy machine reports two lines instead of forty. It elides only the list of checks that
-*passed*. On any non-OK status the repaired / deferred / `USER ACTION REQUIRED` blocks print
-in full, and the complete report is written to a log file whose path comes back as
+*passed*. Whenever anything else was reported — repaired, deferred, or blocked — those blocks
+print in full and the complete report is written to a log file whose path comes back as
 `PREFLIGHT_LOG:`. Drop `--brief`, or `cat` that log, when a check itself looks wrong.
+
+Note that **a deferral keeps the detail even though `PREFLIGHT_STATUS` stays `OK`**. Status
+answers "can *this* skill run", and deferrals are by definition things this skill doesn't
+need — so an OK status with deferrals is the normal shape of a `--skill create` run. It
+briefly wasn't: `--brief` keyed its elision on `STATUS = OK` alone, so it dropped the
+deferral block and deleted the log that held it, leaving the rule below ("warn the user
+which dependency the next skill will hit") impossible to follow in the only mode the skills
+actually invoke.
 
 **Every time.** Not once per session, not "if it looks like it already passed", not
 "the user just ran it". This plugin ships to people who don't know its internals, on
@@ -67,13 +75,38 @@ PREFLIGHT_OK / PREFLIGHT_REPAIRED / PREFLIGHT_DEFERRED / PREFLIGHT_BLOCKED: <cou
 
 | Status | What you do |
 |---|---|
-| `OK` | Say so in one line, then proceed. |
+| `OK` | Say so in one line, then proceed. Still read `PREFLIGHT_DEFERRED` — see below. |
 | `REPAIRED` | **Tell the user what was installed on their machine**, then proceed. Never install things silently — it is their machine. |
 | `BLOCKED` | **STOP.** Show the user the `USER ACTION REQUIRED` block verbatim, including the exact fix commands. Do not start the workflow. Do not improvise a workaround. |
 
 If `PREFLIGHT_DEFERRED > 0`, tell the user now which dependency the *next* skill in the
 chain will hit, even though this one can proceed. Finding out at the handoff is the
 failure this whole contract exists to prevent.
+
+### When a check says it could not tell
+
+Some checks report a third thing: not "healthy", not "broken", but **unanswerable in this
+environment**. Preflight runs inside Claude Code's sandboxed Bash, where the process table
+is unreadable (`pgrep` exits 3 with *"sysmond service not found"*, `ps` returns nothing) and
+loopback probes get swallowed by a SOCKS `ALL_PROXY` unless they opt out. Those checks report
+`DEFERRED` with wording that says so explicitly, and they never block.
+
+That is deliberate, and it is the same lesson as Failure A: **an unanswerable question is not
+a failed dependency.** Two checks used to get this wrong and hard-`BLOCKED` `--skill iterate`
+on machines where both dependencies demonstrably worked — a `socksio` probe that shelled out
+to `llm python`, which is not a subcommand and therefore failed identically whether or not
+socksio was installed, and a `pgrep` for Chrome Beta that could never see a process. Both
+were verified as false by the person they blocked. When you extend this script, a probe that
+cannot distinguish "broken" from "cannot look" must report the latter.
+
+And when you weaken a probe to stop it blocking, do not overshoot into believing it too
+easily. The replacement Chrome check ordered its probes by how wrong each one can be rather
+than by cost, because `curl` to the CDP port — the obvious test — returns rc=0 with a
+zero-byte body in a sandboxed Bash whether or not anything is listening. Trusting that exit
+status would report Chrome running having learned nothing. **A false positive here is worse
+than the false negative it replaced**: a blocked run stops and tells the user, while a run
+that wrongly believes it has a browser goes on to screenshot nothing and evaluate it — which
+is the degraded-run-that-looks-successful the rule below forbids.
 
 ### The one thing you may never do
 

@@ -92,6 +92,8 @@ wiped `uv tool` directory, an expired Datadog key, a Chrome Beta that isn't runn
 a different `uv` winning that race. A result from five minutes ago is not evidence about
 now. Every check is cheap enough to pay for on each run.
 
+**A probe that can't tell must say so.** Preflight runs inside Claude Code's sandboxed Bash, where the process table is unreadable (`pgrep` exits 3 with *"sysmond service not found"*; `ps` returns nothing) and `curl` routes even 127.0.0.1 through a SOCKS `ALL_PROXY` unless told not to. Checks that hit those walls report `DEFERRED` with wording that says the question was unanswerable, and never block — because an unanswerable question is not a failed dependency. Two checks used to get this backwards and hard-blocked `--skill iterate` on healthy machines: a `socksio` probe built on `llm python` (not a subcommand — it failed identically whether or not socksio was installed) and the Chrome Beta `pgrep`. Both are now resolved from evidence that survives the sandbox: the interpreter in the `llm` shim's shebang, and — for Chrome — four probes ordered by *how wrong they can be*, not by cost. `lsof +c 0` leads because it answers "is CDP listening" and "is it Beta" in one call (`+c 0` matters: default lsof truncates COMMAND to 9 chars, so Beta and stable both read as `Google`). Chrome's Beta-profile singleton socket is next. `curl` is *third and only trusted on a parseable body*: in a sandboxed Bash it returns rc=0 with zero bytes whether or not anything is listening, so believing its exit status would report Chrome running having learned nothing — a false positive, which is worse than the false negative this started as, because the run then proceeds and screenshots nothing. `pgrep` is last.
+
 **What preflight does not buy you.** It is about the machine. The run that prompted all of
 this was never environment-blocked — it dropped one handoff line and silently deleted two
 downstream skills. A green preflight is not evidence that a run was complete. That is what
@@ -208,6 +210,8 @@ The plugin ships a `.mcp.json` that registers a `datadog-dashboard-viewer` serve
 ```
 
 `--autoConnect` attaches to a Chrome instance you already have running rather than spawning a fresh one — keep your authenticated Datadog session open in **Chrome Beta** before invoking iterate-dashboard. `--channel=beta` pins to the Beta channel so debug-pipe permissions don't conflict with your day-to-day stable Chrome.
+
+**The tools are not named `datadog-dashboard-viewer`.** Claude Code namespaces a plugin-provided server, so what you actually see is `mcp__plugin_datadog-dashboards_datadog-dashboard-viewer__*`. The `chrome-devtools` plugin also ships this exact server — same binary, same flags — under `mcp__plugin_chrome-devtools_chrome-browser-tools__*`, and either one drives the same Chrome Beta. The `dashboard-browser` agent accepts both, and matches on the tool suffix (`take_snapshot`, `navigate_page`, …) rather than the server segment. It has to: a run where only the `chrome-devtools` plugin was enabled had the agent refuse perfectly good tools because the prefix didn't match, and return nothing.
 
 ### Knowledge
 

@@ -111,7 +111,7 @@ Repeat until `RATING >= 7` or `N >= STOP_LIMIT`:
 
 ### 3.1 Screenshot
 
-**Use the dashboard-browser agent via the Task tool.** Do NOT call `datadog-dashboard-viewer` MCP tools directly — the agent handles navigation timing, widget load waiting, and viewport sizing.
+**Use the dashboard-browser agent via the Task tool.** Do NOT call browser MCP tools directly — the agent handles navigation timing, widget load waiting, and viewport sizing.
 
 ```
 Task(
@@ -122,7 +122,9 @@ Task(
 
 The dashboard test URL comes from `chart-room status <file>`.
 
-If the Task agent fails, retry once. If it fails again, STOP and tell the user the screenshot step failed — do NOT fall back to calling `datadog-dashboard-viewer` MCP tools directly.
+If the Task agent fails, retry once. If it fails again, STOP and tell the user the screenshot step failed — do NOT fall back to calling browser MCP tools directly.
+
+**One retry is specifically warranted when the agent reports "no browser tools".** The server is namespaced when Claude Code registers it, so the tools are `mcp__plugin_datadog-dashboards_datadog-dashboard-viewer__*`, not the bare `datadog-dashboard-viewer`; and the `chrome-devtools` plugin ships the identical server as `mcp__plugin_chrome-devtools_chrome-browser-tools__*`. Either satisfies the agent. If it refused over the prefix, re-dispatch and tell it so. If it reports no chrome-devtools-mcp tools under *any* prefix, that is a real stop — say so and do not describe a dashboard nobody looked at.
 
 **If you cannot invoke the agent at all, that is also a STOP.** A host or session constraint can forbid subagents outright — one real run carried a standing "do not call the Task tool unless the user asked for it", which silently nullified the agent this entire loop depends on. Being unable to use a tool is not permission to proceed without it.
 
