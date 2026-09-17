@@ -18,6 +18,7 @@ vendored Python MCP server under `plugins/mem0-brady/server/`.
 .claude-plugin/marketplace.json     # marketplace manifest — one entry per plugin
 plugins/<name>/
   .claude-plugin/plugin.json        # plugin manifest
+  .codex-plugin/plugin.json         # Codex's manifest — mem0-brady only
   commands/*.md  skills/*/SKILL.md  hooks/hooks.json  scripts/  server/  README.md
 ```
 
@@ -29,6 +30,16 @@ two-line commit touching both files (see `98e6fa2`). Nothing validates this.
 Versions are date-based: `YYMMDD.N` (`260807.0` = 2026-08-07, first release that day).
 The vendored server has its own independent semver in `pyproject.toml`.
 
+`mem0-brady` is the exception that makes it three files: it also ships
+`plugins/mem0-brady/.codex-plugin/plugin.json`, the manifest Codex reads instead of the
+`.claude-plugin` one. Its `description` is deliberately its own short blurb, but its
+**`version` must match the other two** — Codex caches the plugin under
+`~/.codex/plugins/cache/<marketplace>/<plugin>/<version>/` and registers hook trust by
+that path, so a version that disagrees with `.claude-plugin/plugin.json` sends Codex
+looking for `codex/hook.py` under a directory the sync never wrote, and every hook then
+fails with exit 2 (a `PreToolUse` failing that way reads as "Blocked by hook"). Recover
+with `codex plugin list` against the marketplace, which re-materializes the cache.
+
 Adding a plugin: create `plugins/<name>/` with its own `.claude-plugin/plugin.json`, then
 add a marketplace entry with `"source": "./plugins/<name>"`.
 
@@ -39,6 +50,14 @@ add a marketplace entry with `"source": "./plugins/<name>"`.
 claude plugin marketplace add /Users/bradywatkinson/dev/bradys-marketplace
 claude plugin install <name>@bradys-marketplace
 claude plugin marketplace update bradys-marketplace   # after pushing
+
+# Codex reads the same tree, through .codex-plugin/plugin.json instead
+codex plugin marketplace add /Users/bradywatkinson/dev/bradys-marketplace
+codex plugin add mem0-brady@bradys-marketplace
+codex plugin list        # also re-syncs the local cache — the repair for a stale one
+
+# mem0-brady's Codex hook adapter: 9 self-checks, stdlib unittest, no network
+python3 -m unittest discover -s plugins/mem0-brady/codex -p 'test_*.py'
 
 # Manifest sanity (nothing else validates these)
 jq . .claude-plugin/marketplace.json plugins/*/.claude-plugin/plugin.json
@@ -96,7 +115,7 @@ the module roles and the mem0ai-specific landmines (graph deletion bug, mutable
 
 ### `mem0-brady` — the largest and most involved
 
-A self-hosted Mem0 memory backbone. Three layers that must stay consistent:
+A self-hosted Mem0 memory backbone. Four layers that must stay consistent:
 
 1. **The vendored fork** (`server/`) — a `mem0ai`-based MCP server plus console-script
    hooks (`mem0-hook-context`, `mem0-hook-stop`, …) installed as a host tool by setup.
@@ -106,6 +125,15 @@ A self-hosted Mem0 memory backbone. Three layers that must stay consistent:
 3. **The compose stack** (`stack/`) — builds its image from `../server`, so the server and
    the hooks are the same code *by construction*. This co-location is the whole point;
    don't reintroduce a git-based image source.
+4. **The Codex adapter** (`codex/`) — Codex fires the same six events but hands them a
+   different payload, so `codex/hook.py` translates and then `subprocess`es the *same*
+   `hooks/run-*.sh` scripts rather than reimplementing them; only `codex/steer.sh` is
+   Codex-specific. Its transcript converter exists because Codex writes
+   `response_item` records, not Claude's message records, and the shared capture scripts
+   only read the latter. Writes default to `agent_id=codex`, so Codex and Claude
+   memories stay distinguishable in one store. Codex's shell-based file reads emit no
+   `Read` event, which is why `run-filecontext.sh` and `block-memory-write.sh` have no
+   entry in `codex/hooks.json` — that asymmetry is expected, not an omission.
 
 **Memory model — one store, four scopes.** `user_id` (whose store) / `app_id` (what the
 work is about) / `agent_id` (which agent wrote it) / `run_id` (which workstream).

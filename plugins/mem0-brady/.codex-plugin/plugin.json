@@ -1,0 +1,19 @@
+{
+  "name": "mem0-brady",
+  "version": "260917.0",
+  "description": "Shared Mem0 memory for Codex, Claude Code, and Hal.",
+  "author": {
+    "name": "Brady Watkinson"
+  },
+  "skills": "./skills/",
+  "hooks": "./codex/hooks.json",
+  "interface": {
+    "displayName": "Mem0 Brady",
+    "shortDescription": "Use Mem0 Brady in Codex.",
+    "longDescription": "Recall and capture memories through the existing Mem0 server.",
+    "developerName": "Brady Watkinson",
+    "category": "Productivity",
+    "capabilities": [],
+    "defaultPrompt": "Help me use Mem0 Brady."
+  }
+}

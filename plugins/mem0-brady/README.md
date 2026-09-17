@@ -45,6 +45,55 @@ server binary and the MCP server, both under launchd. **compose** runs the same 
 Docker, built from the vendored server (see `stack/README.md`). If you already run Qdrant and
 the MCP server yourself, choose **external** and the plugin installs neither.
 
+## Codex with an existing Claude installation
+
+Codex can use the same running MCP server, Qdrant collection, and user namespace.
+Keep `~/.config/mem0-brady/.env` and the current Compose stack. From a checkout
+containing this Codex adapter, install the plugin and register the existing endpoint:
+
+```sh
+codex plugin marketplace add /path/to/bradys-marketplace
+codex plugin add mem0-brady@bradys-marketplace
+codex mcp add mem0 --url http://127.0.0.1:8788/mcp
+```
+
+Use the URL in `MEM0_BRADY_MCP_URL` if this installation uses a different endpoint.
+MCP registration is separate from plugin installation so each machine retains
+its own URL and credentials. The host still needs the `mem0-hook-*` console scripts
+installed by the existing Claude setup, plus Python 3.10+, Bash, and jq.
+
+Start a new Codex session and open `/hooks` to review and trust the seven Mem0
+hooks. Codex skips untrusted hooks. Use `/mcp` to check the `mem0` connection.
+Installing this plugin doesn't start another server or change the Claude setup.
+
+The Codex adapter reuses the existing scope resolution, recall, capture, metadata
+guard, and operation logging. Writes default to `agent_id=codex`, while recall can
+read Claude and Hal memories in the same partitions. An explicit
+`MEM0_SCOPE_AGENT_ID` still takes precedence. Stop and PreCompact convert Codex
+message records to a temporary transcript that the shared capture scripts can
+read. The adapter discards tool output, reasoning records, and duplicate event
+notifications, then removes the temporary transcript after capture.
+
+Codex has separate hook configuration in `codex/hooks.json`. Its shell-based file
+reads don't emit Claude's `Read` event, so the Claude file-context and native
+file-memory write-blocking hooks aren't installed in Codex. Automatic session
+recall, resume-prompt recall, capture, and explicit MCP tools are available.
+
+To uninstall the Codex hooks and skills, run:
+
+```sh
+codex plugin remove mem0-brady@bradys-marketplace
+```
+
+The separate MCP connection remains. Remove it with `codex mcp remove mem0` if
+desired. Either operation leaves the Compose server and Claude installation alone.
+
+Validate the adapter without writing memories:
+
+```sh
+python3 -m unittest discover -s plugins/mem0-brady/codex -p 'test_*.py'
+```
+
 ## Stacks: managed, compose, external
 
 `MEM0_BRADY_STACK` in `~/.config/mem0-brady/.env` decides how much of the stack the plugin owns.
