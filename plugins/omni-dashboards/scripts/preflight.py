@@ -22,6 +22,12 @@ DOCUMENT_COMMANDS = (
 )
 
 
+def validate_chart_room_schema(schema):
+    if (schema.get("$id") != PINS["schema_id"] or
+            schema_digest(schema) != PINS["schema_sha256"]):
+        raise Blocked("SCHEMA_MISMATCH", "Omni envelope/native schema differs from the tested pin; reconcile the contract before authoring.")
+
+
 class Preflight:
     def __init__(self, args, scratch):
         self.args, self.checks = args, []
@@ -51,13 +57,14 @@ class Preflight:
         return run(argv, env=self.env, timeout=self.args.timeout)
 
     def chart_room(self):
+        minimum = PINS["chart_room_min_version"]
         if not shutil.which("chart-room"):
-            raise Blocked("MISSING_CHART_ROOM", "Install the released Omni-capable chart-room 1.10.0 or later.")
+            raise Blocked("MISSING_CHART_ROOM", f"Install the released Omni-capable chart-room {minimum} or later.")
         version = checked(self.call(["chart-room", "--version"])).strip()
         if not re.fullmatch(r"\d+\.\d+\.\d+", version) or (
-            tuple(map(int, version.split("."))) < tuple(map(int, PINS["chart_room_min_version"].split(".")))
+            tuple(map(int, version.split("."))) < tuple(map(int, minimum.split(".")))
         ):
-            raise Blocked("OUTDATED_CHART_ROOM", "chart-room 1.10.0+ with contract v1 is required; executable presence is insufficient.")
+            raise Blocked("OUTDATED_CHART_ROOM", f"chart-room {minimum}+ with contract v1 is required; executable presence is insufficient.")
         requirements = [
             (["--help"], ["--provider", "--profile", "--format", "omni", "validate", "import"]),
             (["init", "--help"], ["--model", "--prod-folder", "--test-folder"]),
@@ -75,9 +82,7 @@ class Preflight:
             raise Blocked("MISSING_SCHEMA", "chart-room did not materialize its Omni contract schema.")
         schema_bytes = schema_path.read_bytes()
         schema = json.loads(schema_bytes)
-        if (schema.get("$id") != PINS["schema_id"] or
-            schema_digest(schema) != PINS["schema_sha256"]):
-            raise Blocked("SCHEMA_MISMATCH", "Omni envelope/native schema differs from the tested pin; reconcile the contract before authoring.")
+        validate_chart_room_schema(schema)
         return f"chart-room {version}; pinned native/envelope schema, contract v1."
 
     def omni_capabilities(self):

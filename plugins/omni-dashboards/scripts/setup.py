@@ -93,7 +93,7 @@ def main():
     print("Personal credentials:", shlex.join(["omni", "config", "init", "--name", args.profile, "--endpoint", INSTANCE]))
     print("Gemini credentials: llm keys set gemini (user terminal only).")
     print("Chrome Beta: sign into Omni and enable its supported remote debugging/autoConnect.")
-    print("Chart-room: install a released 1.10.0+ build with the pinned schema; local candidates are not release acceptance.")
+    print(f"Chart-room: install a released {PINS['chart_room_min_version']}+ build with the pinned schema; local candidates are not release acceptance.")
     print("Setup cannot assign roles, mint credentials, enable AccessBoost, or change publication policy.")
     return subprocess.run(["bash", str(ROOT / "scripts/check-setup.sh"), "--profile", args.profile]).returncode
 

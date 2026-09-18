@@ -3,9 +3,16 @@
 The interoperability source is Evergreen's `bin/ci/omni_dashboards/handoffs/contract.md`,
 `chart-room-handoff.md`, and `deployment.md` (read 2026-09-17). The implementation
 pins are machine-readable in [dependencies.json](dependencies.json). chart-room
-1.10.0 is the required Omni-capable version; at plugin implementation time its
-local candidate was **not released** and the latest release was 1.9.0. Do not turn
-candidate validation into release/live acceptance.
+1.10.1 is the minimum accepted version. On 2026-09-18 the actual v1.10.1
+release executable passed schema compatibility against commit
+`66c29d7cde1c5585b43ddb554fd3dd7c4a405837`. It includes the filter-clearing,
+completion and machine-output review fixes. Its schema and v1.10.0 `$id` are
+unchanged from release v1.10.0, which added
+`QueryPresentationsPatchExternal.properties.data.minProperties: 1` to the earlier
+candidate, requiring at least one tile record. Native schemas remain exactly
+pinned; version alone never establishes compatibility. See
+[acceptance evidence](../ACCEPTANCE.md) for the artifact checksum and remaining
+live workflow gates.
 
 Official sources:
 

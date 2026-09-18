@@ -6,10 +6,12 @@ import os
 from pathlib import Path
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
 import unittest
+import zlib
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
@@ -17,6 +19,14 @@ from common import Blocked, read_jsonc, schema_digest
 from review import PHASES, parse_rating, validate_ledger
 
 PNG = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j1ioAAAAASUVORK5CYII=')
+
+
+def png_chunk(kind, data):
+    return struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind + data))
+
+
+OTHER_PNG = (b'\x89PNG\r\n\x1a\n' + png_chunk(b'IHDR', struct.pack('>IIBBBBB', 1, 1, 8, 2, 0, 0, 0)) +
+             png_chunk(b'IDAT', zlib.compress(b'\x00\xff\x00\x00')) + png_chunk(b'IEND', b''))
 MODEL = '00000000-0000-4000-8000-000000000001'
 SECRET = 'DO_NOT_PRINT_SECRET'
 
@@ -103,9 +113,13 @@ class PreflightTests(Harness):
         self.assertEqual(self.remote_calls(), [])
 
     def test_old_chart_room_is_not_presence_success(self):
-        result, report = self.preflight(scenario='old_chart_room')
-        self.assertEqual(result.returncode, 1)
-        self.assert_code(report, 'OUTDATED_CHART_ROOM')
+        # Even 1.10.0 with matching schema lacks the required runtime fixes.
+        for scenario in ('old_chart_room', 'chart_room_before_fixes'):
+            with self.subTest(scenario=scenario):
+                result, report = self.preflight(scenario=scenario)
+                self.assertEqual(result.returncode, 1)
+                self.assert_code(report, 'OUTDATED_CHART_ROOM')
+                self.assertIn('1.10.1+', result.stdout)
 
     def test_outdated_official_capabilities_precede_auth(self):
         for scenario, code in [('old_omni', 'OUTDATED_OMNI_CLI'), ('outdated', 'OUTDATED_CAPABILITIES')]:
@@ -206,8 +220,10 @@ class PreflightTests(Harness):
 
 
 class ReviewTests(Harness):
-    def prepare_evidence(self):
+    def prepare_evidence(self, multiple=False):
         value = read_jsonc(self.source)
+        if multiple:
+            value['_meta']['sections'].append({'id': 'detail', 'title': 'Detail', 'questions': [0]})
         value['document']['queryPresentations']['data']['1'] = {
             'type': 'query', 'query': {'fields': ['fixture.count']}}
         self.source.write_text(json.dumps(value))
@@ -228,13 +244,18 @@ class ReviewTests(Harness):
                             'query_evidence': 'Synthetic executed-query fixture', 'observed_at': '2026-09-17T00:00:00Z'}},
             'sections': [{'id': 'overview', 'screenshot': 'overview.png'}],
         }
+        if multiple:
+            (self.pass_dir / 'detail.png').write_bytes(OTHER_PNG)
+            evidence['sections'].append({'id': 'detail', 'screenshot': 'detail.png'})
         self.evidence.write_text(json.dumps(evidence))
         return value, evidence
 
-    def evaluate(self, scenario='', raw=None):
+    def evaluate(self, scenario='', raw=None, mutation=None):
         env = dict(self.env, FAKE_SCENARIO=scenario)
         if raw is not None:
             env['FAKE_RATING'] = raw
+        if mutation is not None:
+            env['FAKE_MUTATION'] = json.dumps(mutation)
         return subprocess.run([sys.executable, str(ROOT / 'scripts/review.py'), 'evaluate',
             '--definition', str(self.source), '--evidence', str(self.evidence),
             '--out', str(self.pass_dir / 'gemini'), '--approved-screenshots'],
@@ -273,6 +294,137 @@ class ReviewTests(Harness):
         llm_call = next(c for c in self.history() if c[0] == 'llm')
         self.assertIn('--no-log', llm_call)
         self.assertIn('-a', llm_call)
+        evaluation = json.loads((self.pass_dir / 'gemini/evaluation.json').read_text())
+        record = evaluation['screenshots'][0]
+        self.assertEqual(record['id'], 'overview')
+        self.assertEqual(record['sha256'], hashlib.sha256(PNG).hexdigest())
+        attachment = self.pass_dir / 'gemini' / record['attachment']
+        self.assertEqual(attachment.read_bytes(), PNG)
+        self.assertEqual(attachment.stat().st_mode & 0o777, 0o400)
+        self.assertIn(str(attachment.resolve()), llm_call)
+        self.assertNotIn(str((self.pass_dir / 'overview.png').resolve()), llm_call)
+        self.assertIn(base64.b64encode(PNG).decode(), html)
+
+    def assert_stale_report(self, section=None):
+        result = self.report(self.write_session())
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn('STALE_EVIDENCE', result.stderr)
+        if section:
+            self.assertIn(section, result.stderr)
+        self.assertFalse((self.root / 'iteration-report.html').exists())
+
+    def test_overwritten_screenshot_invalidates_rating(self):
+        self.prepare_evidence()
+        self.assertEqual(self.evaluate().returncode, 0)
+        before = self.evidence.read_bytes()
+        (self.pass_dir / 'overview.png').write_bytes(OTHER_PNG)
+        self.assert_stale_report('overview')
+        self.assertEqual(self.evidence.read_bytes(), before)
+
+    def test_missing_screenshot_invalidates_rating(self):
+        self.prepare_evidence()
+        self.assertEqual(self.evaluate().returncode, 0)
+        (self.pass_dir / 'overview.png').unlink()
+        self.assert_stale_report('overview')
+
+    def test_substituted_screenshot_invalidates_rating(self):
+        self.prepare_evidence()
+        self.assertEqual(self.evaluate().returncode, 0)
+        replacement = self.pass_dir / 'replacement.png'
+        replacement.write_bytes(OTHER_PNG)
+        screenshot = self.pass_dir / 'overview.png'
+        screenshot.unlink()
+        screenshot.symlink_to(replacement)
+        self.assert_stale_report('overview')
+
+    def test_every_section_is_bound_and_unchanged_sections_render(self):
+        self.prepare_evidence(multiple=True)
+        self.assertEqual(self.evaluate().returncode, 0)
+        for name, original, replacement in [('overview', PNG, OTHER_PNG), ('detail', OTHER_PNG, PNG)]:
+            with self.subTest(section=name):
+                screenshot = self.pass_dir / (name + '.png')
+                screenshot.write_bytes(replacement)
+                self.assert_stale_report(name)
+                screenshot.write_bytes(original)
+        result = self.report(self.write_session())
+        self.assertEqual(result.returncode, 0, result.stderr)
+        html = (self.root / 'iteration-report.html').read_text()
+        self.assertIn('ACCEPTED', result.stdout)
+        self.assertEqual(html.count('data:image/png;base64,'), 2)
+        for data in (PNG, OTHER_PNG):
+            self.assertIn(base64.b64encode(data).decode(), html)
+
+    def test_swapped_section_images_invalidate_rating(self):
+        self.prepare_evidence(multiple=True)
+        self.assertEqual(self.evaluate().returncode, 0)
+        (self.pass_dir / 'overview.png').write_bytes(OTHER_PNG)
+        (self.pass_dir / 'detail.png').write_bytes(PNG)
+        self.assert_stale_report('overview')
+
+    def test_old_or_incomplete_image_manifests_require_new_evaluation(self):
+        self.prepare_evidence(multiple=True)
+        self.assertEqual(self.evaluate().returncode, 0)
+        path = self.pass_dir / 'gemini/evaluation.json'
+        evaluation = json.loads(path.read_text())
+        records = evaluation['screenshots']
+        for manifest in (None, records[:1], list(reversed(records)), [records[0], records[0]]):
+            with self.subTest(manifest=manifest):
+                evaluation['screenshots'] = manifest
+                path.write_text(json.dumps(evaluation))
+                self.assert_stale_report()
+
+    def test_missing_or_changed_evaluation_copy_invalidates_rating(self):
+        self.prepare_evidence()
+        self.assertEqual(self.evaluate().returncode, 0)
+        path = self.pass_dir / 'gemini/screenshots/1.png'
+        path.chmod(0o600)
+        path.write_bytes(OTHER_PNG)
+        self.assert_stale_report('overview')
+        path.unlink()
+        self.assert_stale_report('overview')
+
+    def test_mutation_during_evaluation_has_no_accepted_rating(self):
+        self.prepare_evidence()
+        replacement = self.root / 'replacement.png'
+        replacement.write_bytes(OTHER_PNG)
+        mutations = [
+            {'target': str(self.pass_dir / 'overview.png'), 'replacement': str(replacement)},
+            {'target': str(self.pass_dir / 'overview.png'), 'delete': True},
+            {'attachment': 0, 'replacement': str(replacement)},
+            {'target': str(self.evidence)},
+            {'target': str(self.source)},
+        ]
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                result = self.evaluate(mutation=mutation)
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertIn('STALE_EVIDENCE', result.stderr)
+                self.assertFalse((self.pass_dir / 'gemini/evaluation.json').exists())
+                failure = json.loads((self.pass_dir / 'gemini/failure.json').read_text())
+                self.assertEqual(failure, {'code': 'STALE_EVIDENCE', 'rating': None})
+                shutil.rmtree(self.pass_dir / 'gemini')
+                (self.pass_dir / 'overview.png').write_bytes(PNG)
+
+    def test_transient_recapture_cannot_change_submitted_pixels(self):
+        self.prepare_evidence()
+        replacement = self.root / 'replacement.png'
+        replacement.write_bytes(OTHER_PNG)
+        result = self.evaluate(mutation={'target': str(self.pass_dir / 'overview.png'),
+                                        'replacement': str(replacement), 'restore': True})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        attachments = json.loads((self.root / 'attachments.json').read_text())
+        self.assertEqual([a['sha256'] for a in attachments], [hashlib.sha256(PNG).hexdigest()])
+        self.assertNotEqual(attachments[0]['path'], str((self.pass_dir / 'overview.png').resolve()))
+        self.assertEqual(self.report(self.write_session()).returncode, 0)
+
+    def test_duplicate_sections_fail_before_gemini(self):
+        value, evidence = self.prepare_evidence()
+        evidence['sections'] *= 2
+        self.evidence.write_text(json.dumps(evidence))
+        result = self.evaluate()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('exactly once', result.stderr)
+        self.assertEqual(self.history(), [])
 
     def test_broken_query_prevents_gemini_call(self):
         value, evidence = self.prepare_evidence()

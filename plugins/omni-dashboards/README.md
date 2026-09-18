@@ -6,14 +6,15 @@ Each skill reports a completion ledger. Iteration produces a self-contained HTML
 report and ends at a reviewed merge-to-deploy route.
 
 **Implementation status:** packaged for Claude Code, with offline regression tests.
-Live acceptance is pending the Omni-capable chart-room release, authorized personal
-API access and an approved disposable dashboard pair. At verification on 2026-09-17,
-installed/latest released chart-room was 1.9.0; the local 1.10.0 candidate was not
-released. See [ACCEPTANCE.md](ACCEPTANCE.md) for evidence and remaining gates.
+Schema compatibility was verified on 2026-09-18 against the checksum-matched
+chart-room v1.10.1 release executable, including the upstream review fixes.
+Live plugin acceptance still requires authorized personal API access and an
+approved disposable dashboard pair. See [ACCEPTANCE.md](ACCEPTANCE.md) for the tested
+artifact and remaining gates.
 
 ## Install
 
-Before this change is pushed, install from this repository checkout. Run from its root:
+To install from a local repository checkout, run from its root:
 
 ```bash
 claude plugin marketplace add "$PWD"
@@ -21,13 +22,13 @@ claude plugin install omni-dashboards@bradys-marketplace
 ```
 
 If the marketplace is already registered from GitHub, use this isolated local
-plugin load while reviewing the unpushed tree:
+plugin load while reviewing local changes:
 
 ```bash
 claude --plugin-dir "$PWD/plugins/omni-dashboards"
 ```
 
-After this plugin has been published to GitHub:
+To install or refresh the published plugin from GitHub:
 
 ```bash
 claude plugin marketplace add brady-zip/bradys-marketplace
@@ -64,10 +65,14 @@ Setup can install ordinary dependencies. Official Omni CLI 1.3.1 is installed fr
 its checksum-verified macOS release; an existing different CLI is not overwritten.
 It preserves installed llm plugins and uses persistent llm with llm-gemini. It
 installs mise/Node 22 as needed. Chart-room must be a **released** Omni-capable
-1.10.0+ build whose native schema matches [dependencies.json](knowledge/dependencies.json).
+1.10.1+ build whose native schema matches [dependencies.json](knowledge/dependencies.json).
 Its presence or version string alone is insufficient. The exact schema content is
 hashed using sorted, compact UTF-8 JSON so generator escaping/formatting does not
 create a false mismatch. Schema changes require a deliberate compatibility update.
+The tested release asset and its checksum are also recorded in the dependency
+file so the separate compatibility check can exercise the actual binary.
+Version 1.10.1 includes the filter-clearing, completion and machine-output fixes.
+Its schema retains the v1.10.0 `$id` and content; both are still checked exactly.
 
 Credentials are entered by the user through official tooling in their own terminal:
 
@@ -170,7 +175,10 @@ See [review artifact shapes and commands](knowledge/review-artifacts.md).
 The HTML report embeds all reviewed sections, exact ratings, applied/declined
 suggestions, query-health evidence, tested versions, gaps and final acceptance.
 It links test/prod, local definition and the PR when one exists. A failed run gets
-an incomplete report and phase ledger; a stale source cannot reuse an old rating.
+an incomplete report and phase ledger. Each evaluation submits private screenshot
+copies and records their hashes. Changed or missing captures/copies, stale source
+or changed browser evidence cannot reuse an old rating. Reports embed the verified
+evaluated bytes; older evaluations without image hashes require a new pass.
 
 The next step after successful acceptance is an owned source change reviewed and
 merged through the consuming repo's deployment route. The plugin never performs
@@ -187,6 +195,11 @@ claude plugin validate .claude-plugin/marketplace.json --strict --json
 bash -n plugins/omni-dashboards/scripts/preflight.sh
 bash -n plugins/omni-dashboards/scripts/check-setup.sh
 bash -n plugins/omni-dashboards/scripts/setup.sh
+
+# Separate offline interoperability gate: use the actual pinned release asset.
+CHART_ROOM_NO_UPDATE=1 python3 plugins/omni-dashboards/tests/check_chart_room_compatibility.py \
+  --binary "$(command -v chart-room)" \
+  --source-schema ../chart-room/schema/omni-dashboard.schema.json
 ```
 
 The shell tests use fake external executables and never query/publish real data.
@@ -195,4 +208,11 @@ draft conflicts, absent browsers, unavailable Gemini and deferred probes. Review
 fixtures test broken queries, missing data, malformed ratings, stale screenshots,
 skipped handoffs and report acceptance. Packaging tests verify metadata agreement,
 portable references, workflow transitions and absence of legacy commands.
+The compatibility check is separate from the fake-tool suite. It verifies the
+recorded release asset checksum, runs the real version/help/schema preflight in
+a temporary config directory, compares the optional source schema, and rejects a
+changed native constraint. It downloads nothing, disables updates and makes no
+authenticated or Gemini calls. Omit `--source-schema` when only the release binary
+is available. Repeat it for any later chart-room artifact before updating
+the tested release/schema pair.
 Real create → expand → iterate acceptance must still be recorded separately.

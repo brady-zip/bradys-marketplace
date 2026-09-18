@@ -1,39 +1,91 @@
-# Acceptance record — 2026-09-17
+# Acceptance record — updated 2026-09-18
 
-Status: implementation and offline verification; **live workflow acceptance pending**.
+Status: plugin 260918.0 review fixes and offline verification; **live workflow acceptance pending**.
 No Omni documents, folders, drafts, roles, policies, credentials or CI secrets were
-created or changed while implementing this plugin. No commit, push or PR publication
-has been performed for this change.
+created or changed during this review-fix work. No paid Gemini calls were made.
+The reviewed plugin baseline is `d1955b1a4bcf41a42abbfefcdf198f7ac0587b96`;
+these fixes are packaged as plugin version 260918.0.
 
 ## Local evidence
 
-The stdlib suite passed 36 tests. Shell syntax, Python static checks, both Claude
-manifest validations, and all five skill frontmatter checks passed. Skill checks
-retain Claude-specific argument hints; the Codex skill validator was applied to
-a temporary projection omitting that unsupported Codex key. These checks validate
-packaging and instruction structure, not a live agent/browser/warehouse session.
+The reviewed baseline passed 36 stdlib tests. After these fixes and the v1.10.1
+dependency update, all **46 tests** passed in **34.163 seconds** using
+`python3 -m unittest discover -s plugins/omni-dashboards/tests -p 'test_*.py'`.
+The new overwritten-screenshot regression was also run against the original
+`review.py` in a temporary copy: it failed because the old code still returned
+`ACCEPTED`. The fixed code rejects that same case.
+
+Shell syntax, Python AST checks for seven script/test files, JSON parsing, both
+strict Claude manifest validations, and the two-file metadata invariant passed.
+Plugin version is 260918.0 in both manifests; shared metadata agrees. The five skills and browser
+agent were not changed; their original frontmatter validation remains historical
+evidence. These checks validate local behavior and packaging, not a live
+agent/browser/warehouse session.
 
 | Gate | Outcome | Evidence / limit |
 |---|---|---|
-| Claude plugin and marketplace manifests | DONE | Name, description, version 260917.0 and source registration agree; Claude manifest validation and stdlib checks. |
+| Claude plugin and marketplace manifests | DONE | Name, description, version 260918.0 and source registration agree; Claude manifest validation and stdlib checks. |
 | Five entry skills and browser agent | DONE | Explicit create → expand → iterate handoffs, scoped preflight and phase ledgers; portable internal references. |
 | Shell diagnostic failures | DONE | Fake CLI tests cover missing/outdated dependencies, expired token, wrong host before credential forwarding, denied model/target, PR policy, draft conflict, absent browser, unavailable Gemini and deferred probes. |
-| Query and rating gates | DONE | Fixtures refuse missing/unrun data, broken queries, wrong URL, missing sections, malformed ratings and stale source; no Gemini call occurs when query evidence fails. |
-| HTML report | DONE | Fixture evaluation embeds screenshots, records exact rating, acceptance and ledger, links source/test/prod, and distinguishes below-7 and incomplete runs. |
-| Real installed dependency diagnostic | DONE | Detected installed chart-room 1.9.0 and missing official Omni CLI on normal PATH. No authentication claim made. |
-| Official transport capabilities | DONE | Downloaded checksum-verified official Omni CLI 1.3.1 into a temporary directory and probed help/schema offline. Nothing installed to the user's PATH. |
-| Candidate native schema | DONE | Local chart-room 1.10.0 candidate and generated schema agree after semantic JSON normalization. This is offline candidate evidence, not a released/live acceptance result. |
+| Query and rating gates | DONE | Fixtures retain missing/unrun data, broken query, wrong URL, malformed rating, source/evidence hash, independent evaluator and explicit user-acceptance gates. No Gemini call occurs when query evidence fails. |
+| Screenshot integrity | DONE | Ten new tests cover overwrite, deletion, symlink substitution, each of multiple sections, swapped sections, incomplete/legacy image manifests, changed/missing submitted copies, mutation during evaluation, transient recapture and duplicate section IDs. In-call source/browser JSON changes also fail without a rating. |
+| HTML report | DONE | Unchanged single/multiple-section fixtures embed the exact evaluated bytes in self-contained HTML and retain links, ratings, decisions, acceptance and ledger. Changed images fail with STALE_EVIDENCE. |
+| Initial installation diagnostic | DONE (2026-09-17) | Historical diagnostic detected chart-room 1.9.0 and missing official Omni CLI on PATH; not a claim about current auth or installation health. |
+| Official transport capabilities | DONE (2026-09-17) | Historical checksum-verified official Omni CLI 1.3.1 help/schema probes, without installation. Not rerun for these script fixes. |
+| Released schema compatibility | DONE | Real chart-room v1.10.1 release binary matches its published asset checksum, passes actual plugin preflight, and materializes the same semantic schema as the reviewed chart-room checkout. An altered native constraint is rejected with SCHEMA_MISMATCH. |
 
-The native schema pin derives from official OpenAPI SHA-256
+## Tested dependency and schema change
+
+The accepted **schema compatibility baseline** is
+[chart-room v1.10.1](https://github.com/brady-zip/chart-room/releases/tag/v1.10.1),
+tag target `66c29d7cde1c5585b43ddb554fd3dd7c4a405837`. Its
+`chart-room-darwin-arm64` executable was downloaded to a temporary directory and
+matched the published release asset SHA-256:
+`611da8ee7e8ad7cc6680bab1746cde4f55e7a14108cb5eb6809830906b3edf35`.
+The release metadata, tag and downloaded binary checksum were rechecked on
+2026-09-18. No installed executable was replaced; the existing PATH executable
+was still v1.10.0 and now requires an upgrade before authoring.
+
+The native schema still derives from official OpenAPI SHA-256
 `12a9bc485e8bcd3d09c2a7cff646e0cd2c2090eb83899c860d31829d426e5a94`.
-The entire wrapped native schema's normalized SHA-256 is
+Its entire wrapped schema's normalized SHA-256, computed with
+`common.schema_digest`, is:
+
+`9ad370d2ffb7f72e0a74a425417d7002f534f69ead9dd3a4622ac4cdc55fbec7`.
+
+The v1.10.1 schema is unchanged from v1.10.0 and deliberately retains the
+v1.10.0 `$id`. The minimum executable version is now 1.10.1 so matching the schema
+cannot admit v1.10.0 without the required runtime fixes. Offline regression
+coverage explicitly rejects both v1.9.0 and v1.10.0.
+
+The sole semantic difference from the plugin's original candidate pin is
+`components.schemas.QueryPresentationsPatchExternal.properties.data.minProperties: 1`.
+It rejects zero tile records, retaining chart-room's seed tile during provisioning.
+Removing that constraint exactly reproduces the old digest
 `e5214d44fe6e13f06bab1d2ea4674f2dadd7a2249e395c2553e28275e639e9fc`.
+No native schema was widened or bypassed.
+
+The repeatable check in [tests/check_chart_room_compatibility.py](tests/check_chart_room_compatibility.py)
+passed all four checks: release asset checksum, actual binary capability/schema
+preflight, source/materialized schema equality, and altered-native-schema rejection.
+It uses a temporary config directory with `CHART_ROOM_NO_UPDATE=1` and invokes
+no authenticated or Gemini operation. Run it with the actual release executable
+and the optional reviewed source schema as documented in [README.md](README.md).
+
+The user identified v1.10.1 as the intended follow-up release. Its source diff
+contains filter-clearing synchronization, completion parsing and machine-output
+update suppression fixes. The plugin now requires that release and its actual
+binary passed the compatibility check; these fixes remain owned by chart-room.
+This closes release coordination and offline interoperability, not the plugin's
+live create/expand/review workflow. Repeat the artifact check before accepting any
+later release; this evidence does not automatically carry forward to a new binary.
 
 ## Live completion ledger
 
 | Phase | Status | Reason / next evidence |
 |---|---|---|
-| Released authoring dependency | FAILED | Latest released chart-room is v1.9.0; local 1.10.0 Omni candidate is not released. Require the accepted release and matching contract schema. |
+| Released schema dependency | DONE | v1.10.1 release asset and exact schema verified offline as above; this does not establish full authoring acceptance. |
+| Chart-room release coordination | DONE | User selected the released v1.10.1 follow-up. Source changes were reviewed, the minimum version raised, and the actual release artifact/schema pair verified offline. |
 | Personal Omni authentication | SKIPPED | No authenticated API profile was selected for a live run; user configures official CLI auth. Browser login alone is insufficient. |
 | Approved disposable pair | SKIPPED | No approved model plus concrete prod/test folder IDs or disposable target pair supplied. |
 | Real create | SKIPPED | Waiting for dependency, auth and approved pair; must record distinct stable test/prod IDs and URLs. |
@@ -46,7 +98,7 @@ The entire wrapped native schema's normalized SHA-256 is
 | Final user acceptance | SKIPPED | Requires real current-source review and user response. |
 | Evergreen deployment | SKIPPED | Separate workstream owns automation identity, runner/network access, production/revert and CI activation acceptance. |
 
-After chart-room ships, select the approved pair and profile, run the five-skill
+Select the approved pair and profile, run the five-skill
 workflow, record actual chart-room/Omni/llm/Gemini versions, source digest, query
 health, test publication readback, screenshots, rating history and all phase
 outcomes. Exercise successful content and a missing-data gap. Preserve test-only

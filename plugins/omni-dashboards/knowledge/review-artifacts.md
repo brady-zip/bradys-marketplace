@@ -63,12 +63,29 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/review.py" evaluate \
   --approved-screenshots
 ```
 
-Output: `prompt.txt`, `gemini-output.txt`, `evaluation.json` (or `failure.json`).
+Output: `prompt.txt`, `gemini-output.txt`, `screenshots/*.png`, `evaluation.json`
+(or `failure.json`).
 Gemini returns a finite numeric rating 1–10, summary, and up to five suggestions
 with unique `id`, `suggestion`, `action`. Malformed output stops evaluation with
 no fallback rating. Each pass directory is new, so a failure cannot reuse an old
 successful evaluation. The helper bounds a call to 60 seconds; a timeout stops
 with no rating and can be retried only as a new explicitly diagnosed attempt.
+
+Before calling Gemini, the helper reads each PNG once, hashes those bytes and
+writes a private read-only copy under `screenshots/` in the new evaluation
+directory. Only these copies are attached to llm. Each `evaluation.json`
+`screenshots` record binds the section `id`, original `screenshot` path,
+evaluation-relative `attachment` path and byte-level `sha256`. Source and browser
+JSON hashes remain separate. A recapture during the call cannot replace the
+submitted pixels, and changed/missing originals or copies after the call produce
+`STALE_EVIDENCE` with no accepted evaluation.
+
+Reporting verifies every section's original and submitted copy against the stored
+digest, then embeds those verified copy bytes without rereading the image paths.
+Changed, missing or substituted PNGs invalidate the pass even when browser JSON
+is unchanged. Preserve the whole pass directory when moving a session; paths
+inside the manifest are relative. Evaluations made before screenshot digests were
+recorded are rejected and need a new evaluation; do not fill in hashes afterward.
 
 ## HTML report input
 

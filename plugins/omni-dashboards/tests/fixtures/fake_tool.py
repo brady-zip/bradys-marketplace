@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Deterministic external executables. No network, credentials, or live dashboards."""
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -22,7 +23,7 @@ if name == 'chart-room':
     target = Path(os.environ['CHART_ROOM_CONFIG_DIR']) / 'omni-dashboard.schema.json'
     target.write_bytes(Path(os.environ['FAKE_SCHEMA']).read_bytes())
     if '--version' in args:
-        print('1.9.0' if scenario == 'old_chart_room' else '1.10.0')
+        print({'old_chart_room': '1.9.0', 'chart_room_before_fixes': '1.10.0'}.get(scenario, '1.10.1'))
     elif '--help' in args:
         print('--provider --profile --format --model --prod-folder --test-folder --remote --json omni validate import models topics fields status login')
     elif args[0] == 'validate':
@@ -72,6 +73,22 @@ elif name == 'llm':
     elif '-a' not in args:
         print('{"rating":"high"}' if scenario == 'malformed_gemini' else 'OK')
     else:
+        attachments = [Path(args[i + 1]) for i, arg in enumerate(args) if arg == '-a']
+        mutation = json.loads(os.environ.get('FAKE_MUTATION', '{}'))
+        if mutation:
+            target = attachments[mutation['attachment']] if 'attachment' in mutation else Path(mutation['target'])
+            before = target.read_bytes()
+            if mutation.get('delete'):
+                target.unlink()
+            else:
+                target.chmod(0o600)
+                target.write_bytes(Path(mutation['replacement']).read_bytes() if 'replacement' in mutation else before + b'\n')
+        # Observe attachments after the recapture, as a delayed llm upload would.
+        Path(os.environ['FAKE_CALLS']).with_name('attachments.json').write_text(json.dumps([
+            {'path': str(path), 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()} for path in attachments
+        ]))
+        if mutation.get('restore'):
+            target.write_bytes(before)
         print(os.environ.get('FAKE_RATING', '{"rating":8,"summary":"Clear comparison.","suggestions":[]}'))
 elif name == 'mise':
     print(str(Path(sys.argv[0]).parent.parent))

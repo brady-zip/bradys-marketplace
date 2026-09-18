@@ -82,14 +82,52 @@ def check_evidence(value, source_hash, evidence, directory):
     required_sections = value["_meta"].get("sections", [])
     require(bool(required_sections) and {s["id"] for s in sections} == {s["id"] for s in required_sections},
             "Screenshots must cover every section recorded in _meta.sections.")
+    require(len(sections) == len({s["id"] for s in sections}) == len(required_sections),
+            "Capture each section exactly once; section IDs must be unique.")
     paths = []
     for section in sections:
         path = (directory / section["screenshot"]).resolve()
-        require(path.is_relative_to(directory.resolve()) and path.is_file(),
-                "Screenshots must exist inside the evidence directory.")
-        require(path.read_bytes().startswith(b"\x89PNG\r\n\x1a\n"), "Expected a PNG screenshot.")
+        require(path.is_relative_to(directory.resolve()),
+                "Screenshots must remain inside the evidence directory.")
         paths.append(path)
     return paths
+
+
+def screenshot_bytes(path):
+    try:
+        data = path.read_bytes()
+    except OSError:
+        raise Blocked("INVALID_EVIDENCE", "Screenshot is missing or unreadable: " + path.name) from None
+    require(data.startswith(b"\x89PNG\r\n\x1a\n"), "Expected a PNG screenshot: " + path.name)
+    return data
+
+
+def verified_images(evidence, paths, evaluation, directory):
+    """Return the checked bytes themselves so rendering cannot reread new pixels."""
+    records = evaluation.get("screenshots")
+    if not isinstance(records, list) or len(records) != len(paths):
+        raise Blocked("STALE_EVIDENCE", "Evaluation lacks complete screenshot digests; run a new evaluation.")
+    images = []
+    for section, path, record in zip(evidence["sections"], paths, records):
+        message = "Screenshot evidence is stale for section " + str(section["id"]) + "; run a new evaluation."
+        if (not isinstance(record, dict) or record.get("id") != section["id"] or
+                record.get("screenshot") != section["screenshot"] or
+                not isinstance(record.get("attachment"), str) or not record.get("sha256")):
+            raise Blocked("STALE_EVIDENCE", message)
+        attachment = (directory / record["attachment"]).resolve()
+        if not attachment.is_relative_to(directory.resolve()):
+            raise Blocked("STALE_EVIDENCE", message)
+        # Recapturing the original invalidates the pass even though its submitted
+        # copy survives. Both must match, and HTML uses the verified copy's bytes.
+        for candidate in (path, attachment):
+            try:
+                data = screenshot_bytes(candidate)
+            except Blocked:
+                raise Blocked("STALE_EVIDENCE", message + " Screenshot is missing or invalid.") from None
+            if hashlib.sha256(data).hexdigest() != record["sha256"]:
+                raise Blocked("STALE_EVIDENCE", message + " Screenshot bytes changed.")
+        images.append(data)
+    return images
 
 
 def parse_rating(text):
@@ -123,7 +161,9 @@ def parse_rating(text):
 def evaluate(args):
     value = definition(args.definition)
     evidence_path = Path(args.evidence).resolve()
-    evidence = json.loads(evidence_path.read_text())
+    evidence_bytes = evidence_path.read_bytes()
+    evidence = json.loads(evidence_bytes)
+    evidence_hash = hashlib.sha256(evidence_bytes).hexdigest()
     source_hash = digest(args.definition)
     images = check_evidence(value, source_hash, evidence, evidence_path.parent)
     require(args.approved_screenshots, "Confirm the organization's screenshot-sharing rules before invoking Gemini.")
@@ -132,6 +172,16 @@ def evaluate(args):
     out = Path(args.out).resolve()
     require(not out.exists(), "Use a new pass directory; never overwrite a previous rating.")
     out.mkdir(parents=True, mode=0o700)
+    (out / "screenshots").mkdir(mode=0o700)
+    screenshots = []
+    for index, (section, path) in enumerate(zip(evidence["sections"], images), 1):
+        data = screenshot_bytes(path)
+        attachment = "screenshots/" + str(index) + ".png"
+        frozen = out / attachment
+        frozen.write_bytes(data)
+        frozen.chmod(0o400)
+        screenshots.append(dict(id=section["id"], screenshot=section["screenshot"],
+                                attachment=attachment, sha256=hashlib.sha256(data).hexdigest()))
     meta = value["_meta"]
     # Deliberately exclude the query response, raw export, and CLI output.
     prompt = (
@@ -147,8 +197,10 @@ def evaluate(args):
     )
     (out / "prompt.txt").write_text(prompt)
     argv = ["llm", "-m", args.model, "--no-stream", "--no-log"]
-    for path in images:
-        argv.extend(["-a", str(path)])
+    # Submit private copies of the bytes hashed above. A browser recapture while
+    # llm loads its attachments cannot silently change what Gemini evaluates.
+    for screenshot in screenshots:
+        argv.extend(["-a", str(out / screenshot["attachment"])])
     result = run(argv, stdin=prompt, timeout=60)
     if result.returncode:
         private_json(out / "failure.json", {"code": "GEMINI_UNAVAILABLE", "rating": None})
@@ -156,11 +208,19 @@ def evaluate(args):
     (out / "gemini-output.txt").write_text(result.stdout)
     try:
         rating = parse_rating(result.stdout)
-    except Blocked:
-        private_json(out / "failure.json", {"code": "MALFORMED_RATING", "rating": None})
+        verified_images(evidence, images, {"screenshots": screenshots}, out)
+        try:
+            unchanged = digest(args.definition) == source_hash and digest(evidence_path) == evidence_hash
+        except OSError:
+            unchanged = False
+        if not unchanged:
+            raise Blocked("STALE_EVIDENCE", "Source or browser evidence changed during evaluation; run a new evaluation.")
+    except Blocked as error:
+        private_json(out / "failure.json", {"code": error.code, "rating": None})
         raise
     evaluation = dict(rating, evaluator="gemini", model=args.model,
-                      definition_sha256=source_hash, evidence_sha256=digest(evidence_path),
+                      definition_sha256=source_hash, evidence_sha256=evidence_hash,
+                      screenshots=screenshots,
                       observed_at=datetime.now(timezone.utc).isoformat())
     private_json(out / "evaluation.json", evaluation)
     print(json.dumps(evaluation, indent=2))
@@ -200,12 +260,13 @@ def report(args):
         evaluation_path = (root / item["evaluation"]).resolve()
         require(evidence_path.is_relative_to(root) and evaluation_path.is_relative_to(root),
                 "Pass evidence must remain in the session directory.")
-        evidence = json.loads(evidence_path.read_text())
+        evidence_bytes = evidence_path.read_bytes()
+        evidence = json.loads(evidence_bytes)
         evaluation = json.loads(evaluation_path.read_text())
         rating = parse_rating(json.dumps(evaluation))
         require(evaluation.get("evaluator") == "gemini" and
                 evaluation.get("model", "").startswith("gemini/") and
-                evaluation.get("evidence_sha256") == digest(evidence_path),
+                evaluation.get("evidence_sha256") == hashlib.sha256(evidence_bytes).hexdigest(),
                 "Evaluation must reference unchanged evidence and an independent Gemini model.")
         # Earlier passes have their own source snapshots; final pass must match current source.
         snapshot = (root / item["definition"]).resolve()
@@ -214,6 +275,7 @@ def report(args):
         last_hash = digest(snapshot)
         require(evaluation.get("definition_sha256") == last_hash, "Rating is stale for its source snapshot.")
         images = check_evidence(pass_value, last_hash, evidence, evidence_path.parent)
+        image_bytes = verified_images(evidence, images, evaluation, evaluation_path.parent)
         view = [evidence[k] for k in ("filters", "time_window", "timezone")]
         require(previous_view is None or view == previous_view or bool(item.get("view_change_reason")),
                 "Preserve the active view between passes or document an intentional change.")
@@ -223,7 +285,7 @@ def report(args):
                 all(d["status"] in ("APPLIED", "DECLINED") and d.get("reason") for d in decisions),
                 "Record every suggestion as applied or declined with a reason.")
         images_html = "".join('<img alt="Dashboard section" src="data:image/png;base64,' +
-                              base64.b64encode(p.read_bytes()).decode() + '">' for p in images)
+                              base64.b64encode(data).decode() + '">' for data in image_bytes)
         details = {"rating": rating, "decisions": decisions, "query_health": evidence,
                    "view_change_reason": item.get("view_change_reason")}
         cards.append(f"<details open><summary>Pass {index}: {rating['rating']}/10</summary>" +
