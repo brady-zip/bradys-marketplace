@@ -1,14 +1,16 @@
 ---
 name: create-dashboard
 description: Create or adopt an Omni dashboard from intent, select an existing shared model and topic, then explicitly invoke expansion and independent visual review. Use for dashboard content, not semantic-model development.
-argument-hint: "[business topic or existing dashboard URL]"
-allowed-tools: Bash(bash:*), Bash(chart-room:*), Bash(omni:*), Read, Write, Edit, AskUserQuestion, Skill
+argument-hint: "[business topic or existing dashboard URL] [--handoff PATH]"
+allowed-tools: Bash(bash:*), Bash(python3:*), Bash(chart-room:*), Bash(omni:*), Read, Write, Edit, AskUserQuestion, Skill
 ---
 
 # Create an Omni dashboard
 
 Read @${CLAUDE_PLUGIN_ROOT}/knowledge/workflow-contract.md and
-@${CLAUDE_PLUGIN_ROOT}/knowledge/omni-reference.md. Work only on `.omni.jsonc`.
+@${CLAUDE_PLUGIN_ROOT}/knowledge/omni-reference.md,
+@${CLAUDE_PLUGIN_ROOT}/knowledge/authoring-cookbook.md and
+@${CLAUDE_PLUGIN_ROOT}/knowledge/phase-handoff.md. Work only on `.omni.jsonc`.
 
 ## 0. Preflight — every invocation
 
@@ -25,6 +27,9 @@ Use supplied context first; ask only for missing decisions. Record 3–5 specifi
 business questions, the audience and its decisions, scope, and accountable owner.
 Ask whether this is a new pair or adoption of an existing dashboard. An existing
 URL does not authorize replacing its production content.
+Read a supplied `--handoff` file and reuse its decisions after checking its source
+and targets. Otherwise start a private `handoff.json` using the phase-handoff
+contract and populate it as discovery proceeds.
 
 ## 2. Select the model and topic
 
@@ -92,15 +97,20 @@ For new dashboards, write metadata, title/description and intentional empty
 containers only. Do not author data tiles here. For imports retain existing tiles
 for expansion to inventory and verify. Validate with `chart-room validate FILE`.
 Schema validity proves shape, not useful data or rendering.
+For later expansion, copy the shape from
+@${CLAUDE_PLUGIN_ROOT}/examples/reference.omni.jsonc; do not derive it from the
+schema. Its model, fields and targets are synthetic and must not be copied.
 
 ## 6. Invoke expansion — required handoff
 
-Tell the user which file you are handing off. Actually invoke the Skill tool:
+Write the current source hash, selected auth, discovered model/topic, targets,
+decisions and ledger to `handoff.json`. Tell the user which file you are handing
+off. Actually invoke the Skill tool:
 
-`Skill(skill="omni-dashboards:expand-dashboard", args="path/to/dashboard.omni.jsonc")`
+`Skill(skill="omni-dashboards:expand-dashboard", args="path/to/dashboard.omni.jsonc --handoff /absolute/private/handoff.json")`
 
 Carry the selected profile, model/topic, questions, grain, filters, folders, owner
-and discovery evidence into the handoff. Do not do expansion inline because the
+and discovery evidence in that structured handoff. Do not do expansion inline because the
 queries already seem obvious. Expansion must in turn invoke iteration.
 
 If the user asks to stop, record the handoff as `SKIPPED` with their reason. If the

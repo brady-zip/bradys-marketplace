@@ -5,8 +5,9 @@ snapshots, browser observations, screenshots and Gemini responses by pass. The
 report is a single HTML file with embedded screenshots, escaped text, no external
 assets or scripts. It is an internal artifact, not a public publication target.
 
-The evaluator sends only screenshots, intent/audience/questions/scope and the active
-view to Gemini. Establish organizational permission for that scope; never attach
+The evaluator sends only screenshots, intent/audience/questions/scope, the
+allowlisted question-status context below and the active view to Gemini.
+Establish organizational permission for that scope; never attach
 raw query exports. `--approved-screenshots` records the caller's confirmation of
 that prerequisite; it does not discover policy automatically. Installed llm uses
 `--no-log` so dashboard prompts are not also stored in its global conversation log.
@@ -46,13 +47,58 @@ query evidence:
 }
 ```
 
-Tiles must cover every query/sql/linked tile. Blank notes do not need data evidence.
-Screenshots must cover every `_meta.sections` ID; capture all pages/tabs and use the
-same 1440×1000 viewport. An `expected_empty` tile additionally needs `empty_reason`
+`tiles` keys must equal **exactly** the query/sql/linked record keys in
+`document.queryPresentations.data`. Exclude blank tiles entirely: including one is
+a hard failure, as is an extra, omitted or stale data key. For example, with tile
+`1` query, `2` blank and `3` linked, evidence keys must be `["1", "3"]`.
+
+`sections` IDs must equal **exactly** `_meta.sections` IDs, each once. If metadata
+has `overview` and `detail`, supply exactly those two captures; an extra overview
+image can be a supporting file but must not invent a third section. Splitting or
+renaming a section changes the source digest and screenshot set: update metadata
+and recapture/re-evaluate instead of reusing a prior pass. Capture all pages/tabs
+and use the same 1440×1000 viewport. An `expected_empty` tile additionally needs `empty_reason`
 and `empty_accepted: true`. Never mark an unresolved missing measure as expected
 empty. The gate rejects broken queries, stale source hashes, wrong URLs and missing
 screenshots before calling Gemini. The helper validates evidence consistency; it
 cannot establish truth of manually authored observations.
+
+Use `control_checks` for concise actual states, mapped/excluded/implicit tile IDs,
+expected versus observed changes, on-page claims checked and restoration evidence.
+Retain card/body and canvas dimensions, console findings and the privacy sweep in
+the private browser artifact. These observations support the browser checklist;
+the helper does not execute it or infer interactive correctness from a screenshot.
+
+## Question-status context
+
+Keep `_meta.questions` as the existing 3–5 strings. If supplied,
+`_meta.question_status` must contain each exact question string once, with status
+`backed`, `partial` or `blocked` and a nonempty `reason`. Example:
+
+```json
+{
+  "questions": ["How much?", "When?", "Which group?"],
+  "question_status": [
+    {"question": "How much?", "status": "backed", "reason": "Verified aggregate count."},
+    {"question": "When?", "status": "partial", "reason": "Only the current month is available.", "limitation_accepted": true, "acceptance_reason": "Owner explicitly chose a current-month view while historical data is repaired."},
+    {"question": "Which group?", "status": "blocked", "reason": "No owned group mapping exists.", "limitation_accepted": false}
+  ]
+}
+```
+
+Do not copy the illustrative acceptance decision. Set `limitation_accepted:true`
+only for partial/blocked questions with the user's actual decision recorded in
+`acceptance_reason`; it is distinct from final dashboard acceptance. Optional
+owner/discovery/raw evidence keys are not sent. Only `question`, `status`, `reason`,
+`limitation_accepted` and, when accepted, `acceptance_reason` reach Gemini. Keep
+these summaries within the agreed sharing scope. Missing question-status metadata
+is supported for older sources but is sent as **unassessed**, never as an accepted
+limitation. Malformed, duplicated or stale question mappings stop evaluation.
+
+Gemini judges how clearly accepted limitations and next steps are presented,
+alongside the backed content's usefulness. It still penalizes hidden gaps,
+misleading claims and unaccepted shortcomings. Query-health, current-source and
+screenshot integrity, rating threshold and final user-acceptance gates are unchanged.
 
 Run a pass:
 

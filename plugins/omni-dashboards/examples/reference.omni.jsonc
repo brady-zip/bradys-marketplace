@@ -1,0 +1,648 @@
+// Shape reference adapted from the 2026-09-18 live-run patterns.
+// Offline validated only: no real models, targets, rows, credentials or acceptance claims.
+// Copy shapes, not this envelope; read ../knowledge/authoring-cookbook.md.
+{
+  "$schema": "https://raw.githubusercontent.com/brady-zip/chart-room/v1.10.0/schema/omni-dashboard.schema.json",
+  "version": 1,
+  "provider": "omni",
+  "instance": "https://zip.omniapp.co",
+  "targets": {
+    "prod": "reference-prod-not-provisioned",
+    "test": "reference-test-not-provisioned"
+  },
+  "_meta": {
+    "intent": "Demonstrate native tile and layout shapes",
+    "audience": "Dashboard authors",
+    "scope": "Synthetic authoring example; never publish as-is",
+    "questions": [
+      "How many events occurred?",
+      "How did activity change over time?",
+      "Which teams contributed?"
+    ],
+    "sections": [
+      {
+        "id": "overview",
+        "title": "Overview"
+      },
+      {
+        "id": "trends",
+        "title": "Trends"
+      },
+      {
+        "id": "details",
+        "title": "Details"
+      }
+    ],
+    "timezone": "UTC",
+    "time_window": {
+      "start_inclusive": "2026-08-01",
+      "end_exclusive": "2026-09-01"
+    },
+    "reference_validation": "Offline chart-room schema validation only; model fields and targets are synthetic."
+  },
+  "document": {
+    "name": "Authoring shape reference",
+    "description": "Offline example. Copy tile/layout shapes into an initialized definition; discover real fields and preserve its targets.",
+    "modelId": "00000000-0000-4000-8000-000000000001",
+    "queryPresentations": {
+      "data": {
+        "1": {
+          "type": "query",
+          "name": "Events in selected scope",
+          "subTitle": "Aug 1–31, UTC; Team and Priority apply.",
+          "automaticVis": true,
+          "query": {
+            "calculations": [],
+            "column_totals": {},
+            "fields": [
+              "example_events.event_count"
+            ],
+            "fill_fields": [],
+            "filters": {
+              "example_events.created_at": {
+                "type": "date",
+                "kind": "BETWEEN",
+                "values": [
+                  "2026-08-01",
+                  "2026-09-01"
+                ]
+              }
+            },
+            "pivots": [],
+            "row_totals": {},
+            "sorts": [],
+            "table": "example_events",
+            "userEditedSQL": "",
+            "limit": 200
+          },
+          "visConfig": {
+            "chartType": "kpi",
+            "fields": [
+              "example_events.event_count"
+            ],
+            "version": 0,
+            "visConfig": {
+              "visType": "omni-kpi",
+              "config": {}
+            }
+          }
+        },
+        "2": {
+          "type": "query",
+          "name": "Events by week",
+          "subTitle": "UTC; Team and Priority apply; edge weeks are partial.",
+          "automaticVis": true,
+          "query": {
+            "calculations": [],
+            "column_totals": {},
+            "fields": [
+              "example_events.created_at[week]",
+              "example_events.event_count"
+            ],
+            "fill_fields": [],
+            "filters": {
+              "example_events.created_at": {
+                "type": "date",
+                "kind": "BETWEEN",
+                "values": [
+                  "2026-08-01",
+                  "2026-09-01"
+                ]
+              }
+            },
+            "pivots": [],
+            "row_totals": {},
+            "sorts": [
+              {
+                "column_name": "example_events.created_at[week]",
+                "sort_descending": false
+              }
+            ],
+            "table": "example_events",
+            "userEditedSQL": "",
+            "limit": 200
+          },
+          "visConfig": {
+            "chartType": "line",
+            "fields": [
+              "example_events.created_at[week]",
+              "example_events.event_count"
+            ],
+            "version": 0,
+            "visConfig": {
+              "visType": "vegalite",
+              "config": {}
+            }
+          }
+        },
+        "3": {
+          "type": "query",
+          "name": "Events by team",
+          "subTitle": "All teams; Priority applies. Team does not apply.",
+          "automaticVis": true,
+          "query": {
+            "calculations": [],
+            "column_totals": {},
+            "fields": [
+              "example_events.team",
+              "example_events.event_count"
+            ],
+            "fill_fields": [],
+            "filters": {
+              "example_events.created_at": {
+                "type": "date",
+                "kind": "BETWEEN",
+                "values": [
+                  "2026-08-01",
+                  "2026-09-01"
+                ]
+              }
+            },
+            "pivots": [],
+            "row_totals": {},
+            "sorts": [
+              {
+                "column_name": "example_events.event_count",
+                "sort_descending": true
+              }
+            ],
+            "table": "example_events",
+            "userEditedSQL": "",
+            "limit": 200
+          },
+          "visConfig": {
+            "chartType": "bar",
+            "fields": [
+              "example_events.team",
+              "example_events.event_count"
+            ],
+            "version": 0,
+            "visConfig": {
+              "visType": "vegalite",
+              "config": {}
+            }
+          }
+        },
+        "4": {
+          "type": "query",
+          "name": "Team details",
+          "subTitle": "All teams; Priority applies. Team does not apply.",
+          "automaticVis": false,
+          "query": {
+            "calculations": [],
+            "column_totals": {},
+            "fields": [
+              "example_events.team",
+              "example_events.event_count"
+            ],
+            "fill_fields": [],
+            "filters": {
+              "example_events.created_at": {
+                "type": "date",
+                "kind": "BETWEEN",
+                "values": [
+                  "2026-08-01",
+                  "2026-09-01"
+                ]
+              }
+            },
+            "pivots": [],
+            "row_totals": {},
+            "sorts": [
+              {
+                "column_name": "example_events.event_count",
+                "sort_descending": true
+              }
+            ],
+            "table": "example_events",
+            "userEditedSQL": "",
+            "limit": 200
+          },
+          "visConfig": {
+            "chartType": "table",
+            "fields": [
+              "example_events.team",
+              "example_events.event_count"
+            ],
+            "version": 0,
+            "visConfig": {
+              "visType": "omni-table",
+              "config": {}
+            }
+          }
+        },
+        "5": {
+          "type": "query",
+          "name": "Window total",
+          "subTitle": "All teams and priorities; controls do not apply.",
+          "automaticVis": false,
+          "query": {
+            "calculations": [],
+            "column_totals": {},
+            "fields": [
+              "example_events.event_count"
+            ],
+            "fill_fields": [],
+            "filters": {
+              "example_events.created_at": {
+                "type": "date",
+                "kind": "BETWEEN",
+                "values": [
+                  "2026-08-01",
+                  "2026-09-01"
+                ]
+              }
+            },
+            "pivots": [],
+            "row_totals": {},
+            "sorts": [],
+            "table": "example_events",
+            "userEditedSQL": "",
+            "limit": 200
+          },
+          "visConfig": {
+            "chartType": "singleRecord",
+            "fields": [
+              "example_events.event_count"
+            ],
+            "version": 0,
+            "visConfig": {
+              "visType": "single-record",
+              "config": {}
+            }
+          }
+        },
+        "6": {
+          "type": "blank",
+          "name": "Notes",
+          "subTitle": "Static reference note",
+          "description": "Blank tile metadata; use inline-text for longer explanations.",
+          "automaticVis": false
+        }
+      },
+      "order": [
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6"
+      ]
+    },
+    "controls": {
+      "data": {
+        "1": {
+          "config": {
+            "type": "string",
+            "kind": "EQUALS",
+            "values": [],
+            "fieldName": "example_events.team",
+            "base_view": "example_events",
+            "label": "Team"
+          },
+          "map": {
+            "1": "example_events.team",
+            "2": "example_events.team",
+            "3": false,
+            "4": false,
+            "5": false,
+            "6": false
+          }
+        },
+        "2": {
+          "config": {
+            "type": "string",
+            "kind": "EQUALS",
+            "values": [],
+            "fieldName": "example_events.priority",
+            "base_view": "example_events",
+            "label": "Priority"
+          },
+          "map": {
+            "1": "example_events.priority",
+            "2": "example_events.priority",
+            "3": "example_events.priority",
+            "4": "example_events.priority",
+            "5": false,
+            "6": false
+          }
+        }
+      },
+      "order": [
+        "1",
+        "2"
+      ]
+    },
+    "settings": {
+      "crossfilterEnabled": false,
+      "customText": null,
+      "facetFilters": true,
+      "refreshInterval": null,
+      "runQueriesOn": "current-page"
+    },
+    "containers": [
+      {
+        "containerType": "page",
+        "instanceKey": "page",
+        "name": "Dashboard",
+        "container": {
+          "containerType": "stack",
+          "instanceKey": "root",
+          "direction": "column",
+          "gap": 2,
+          "children": [
+            {
+              "instanceKey": "overview",
+              "type": "inline-text",
+              "content": "## Authoring reference\nSynthetic fields and IDs. Replace them using discovery before any remote operation.",
+              "textAlign": "start",
+              "appearance": {
+                "as": "inline"
+              }
+            },
+            {
+              "containerType": "stack",
+              "instanceKey": "control-row",
+              "direction": "row",
+              "children": [
+                {
+                  "instanceKey": "control-1",
+                  "type": "control",
+                  "id": "1"
+                },
+                {
+                  "instanceKey": "control-2",
+                  "type": "control",
+                  "id": "2"
+                }
+              ]
+            },
+            {
+              "containerType": "stack",
+              "instanceKey": "headline-row",
+              "direction": "row",
+              "gap": 2,
+              "children": [
+                {
+                  "containerType": "stack",
+                  "instanceKey": "card-1",
+                  "direction": "column",
+                  "height": "240px",
+                  "minHeight": "240px",
+                  "fillSpace": true,
+                  "gap": 0.5,
+                  "children": [
+                    {
+                      "instanceKey": "title-1",
+                      "id": "1",
+                      "type": "query",
+                      "as": "metadata",
+                      "format": "name",
+                      "style": {
+                        "height": "28px"
+                      }
+                    },
+                    {
+                      "instanceKey": "subtitle-1",
+                      "id": "1",
+                      "type": "query",
+                      "as": "metadata",
+                      "format": "subtitle",
+                      "style": {
+                        "height": "48px"
+                      }
+                    },
+                    {
+                      "instanceKey": "body-1",
+                      "id": "1",
+                      "type": "query",
+                      "as": "chart",
+                      "style": {
+                        "fillSpace": true,
+                        "minHeight": "96px"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "containerType": "stack",
+                  "instanceKey": "card-5",
+                  "direction": "column",
+                  "height": "240px",
+                  "minHeight": "240px",
+                  "fillSpace": true,
+                  "gap": 0.5,
+                  "children": [
+                    {
+                      "instanceKey": "title-5",
+                      "id": "5",
+                      "type": "query",
+                      "as": "metadata",
+                      "format": "name",
+                      "style": {
+                        "height": "28px"
+                      }
+                    },
+                    {
+                      "instanceKey": "subtitle-5",
+                      "id": "5",
+                      "type": "query",
+                      "as": "metadata",
+                      "format": "subtitle",
+                      "style": {
+                        "height": "48px"
+                      }
+                    },
+                    {
+                      "instanceKey": "body-5",
+                      "id": "5",
+                      "type": "query",
+                      "as": "result",
+                      "style": {
+                        "fillSpace": true,
+                        "minHeight": "96px"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "instanceKey": "divider",
+              "type": "inline-divider",
+              "direction": "horizontal"
+            },
+            {
+              "instanceKey": "trends",
+              "type": "inline-text",
+              "content": "## Trends and comparisons\nUse one semantic count per bar; do not stack a total with its subset.",
+              "textAlign": "start",
+              "appearance": {
+                "as": "inline"
+              }
+            },
+            {
+              "containerType": "stack",
+              "instanceKey": "chart-row",
+              "direction": "row",
+              "gap": 2,
+              "children": [
+                {
+                  "containerType": "stack",
+                  "instanceKey": "card-2",
+                  "direction": "column",
+                  "height": "430px",
+                  "minHeight": "430px",
+                  "fillSpace": true,
+                  "gap": 0.5,
+                  "children": [
+                    {
+                      "instanceKey": "title-2",
+                      "id": "2",
+                      "type": "query",
+                      "as": "metadata",
+                      "format": "name",
+                      "style": {
+                        "height": "28px"
+                      }
+                    },
+                    {
+                      "instanceKey": "subtitle-2",
+                      "id": "2",
+                      "type": "query",
+                      "as": "metadata",
+                      "format": "subtitle",
+                      "style": {
+                        "height": "48px"
+                      }
+                    },
+                    {
+                      "instanceKey": "body-2",
+                      "id": "2",
+                      "type": "query",
+                      "as": "chart",
+                      "style": {
+                        "fillSpace": true,
+                        "minHeight": "96px"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "containerType": "stack",
+                  "instanceKey": "card-3",
+                  "direction": "column",
+                  "height": "430px",
+                  "minHeight": "430px",
+                  "fillSpace": true,
+                  "gap": 0.5,
+                  "children": [
+                    {
+                      "instanceKey": "title-3",
+                      "id": "3",
+                      "type": "query",
+                      "as": "metadata",
+                      "format": "name",
+                      "style": {
+                        "height": "28px"
+                      }
+                    },
+                    {
+                      "instanceKey": "subtitle-3",
+                      "id": "3",
+                      "type": "query",
+                      "as": "metadata",
+                      "format": "subtitle",
+                      "style": {
+                        "height": "48px"
+                      }
+                    },
+                    {
+                      "instanceKey": "body-3",
+                      "id": "3",
+                      "type": "query",
+                      "as": "chart",
+                      "style": {
+                        "fillSpace": true,
+                        "minHeight": "96px"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "instanceKey": "details",
+              "type": "inline-text",
+              "content": "## Details\nThe Team control excludes this table. Reconciliation with the headline requires matching control scope.",
+              "textAlign": "start",
+              "appearance": {
+                "as": "inline"
+              }
+            },
+            {
+              "containerType": "stack",
+              "instanceKey": "card-4",
+              "direction": "column",
+              "height": "420px",
+              "minHeight": "420px",
+              "fillSpace": true,
+              "gap": 0.5,
+              "children": [
+                {
+                  "instanceKey": "title-4",
+                  "id": "4",
+                  "type": "query",
+                  "as": "metadata",
+                  "format": "name",
+                  "style": {
+                    "height": "28px"
+                  }
+                },
+                {
+                  "instanceKey": "subtitle-4",
+                  "id": "4",
+                  "type": "query",
+                  "as": "metadata",
+                  "format": "subtitle",
+                  "style": {
+                    "height": "48px"
+                  }
+                },
+                {
+                  "instanceKey": "body-4",
+                  "id": "4",
+                  "type": "query",
+                  "as": "result",
+                  "style": {
+                    "fillSpace": true,
+                    "minHeight": "96px"
+                  }
+                }
+              ]
+            },
+            {
+              "instanceKey": "blank-note",
+              "id": "6",
+              "type": "query",
+              "as": "metadata",
+              "format": "description"
+            },
+            {
+              "instanceKey": "spacer",
+              "type": "inline-spacer",
+              "size": 2
+            },
+            {
+              "instanceKey": "future-note",
+              "type": "placeholder",
+              "placeholderType": "text",
+              "label": "Example placeholder",
+              "description": "Replace or remove this illustrative placement before review."
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

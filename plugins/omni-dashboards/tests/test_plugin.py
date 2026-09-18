@@ -16,7 +16,7 @@ import zlib
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 from common import Blocked, read_jsonc, schema_digest
-from review import PHASES, parse_rating, validate_ledger
+from review import PHASES, parse_rating, question_context, validate_ledger
 
 PNG = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j1ioAAAAASUVORK5CYII=')
 
@@ -304,6 +304,55 @@ class ReviewTests(Harness):
         self.assertIn(str(attachment.resolve()), llm_call)
         self.assertNotIn(str((self.pass_dir / 'overview.png').resolve()), llm_call)
         self.assertIn(base64.b64encode(PNG).decode(), html)
+
+    def test_question_limitations_reach_evaluator_without_private_evidence(self):
+        value, evidence = self.prepare_evidence()
+        questions = value['_meta']['questions']
+        value['_meta']['question_status'] = [
+            {'question': questions[0], 'status': 'backed', 'reason': 'Verified count'},
+            {'question': questions[1], 'status': 'partial', 'reason': 'Only current month',
+             'limitation_accepted': True, 'acceptance_reason': 'Owner chose current month',
+             'raw_query_export': 'DO_NOT_SEND_QUERY_EXPORT', 'owner': 'DO_NOT_SEND_OWNER'},
+            {'question': questions[2], 'status': 'blocked', 'reason': 'Missing group mapping'},
+        ]
+        self.source.write_text(json.dumps(value))
+        shutil.copyfile(self.source, self.snapshot)
+        evidence['definition_sha256'] = hashlib.sha256(self.source.read_bytes()).hexdigest()
+        self.evidence.write_text(json.dumps(evidence))
+        result = self.evaluate()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        prompt = (self.pass_dir / 'gemini/prompt.txt').read_text()
+        context = json.loads(prompt.split('\nQuestion status: ', 1)[1].split('\nActive view:', 1)[0])
+        self.assertEqual(context[1]['acceptance_reason'], 'Owner chose current month')
+        self.assertTrue(context[1]['limitation_accepted'])
+        self.assertFalse(context[2]['limitation_accepted'])
+        self.assertNotIn('DO_NOT_SEND', prompt)
+        self.assertEqual(self.report(self.write_session()).returncode, 0)
+
+    def test_unassessed_questions_do_not_become_accepted_limitations(self):
+        value, _ = self.prepare_evidence()
+        context = question_context(value['_meta'])
+        self.assertEqual([row['status'] for row in context], ['unassessed'] * 3)
+        self.assertTrue(all('limitation_accepted' not in row for row in context))
+
+    def test_invalid_question_status_stops_before_gemini(self):
+        value, evidence = self.prepare_evidence()
+        questions = value['_meta']['questions']
+        valid = [{'question': q, 'status': 'blocked', 'reason': 'Known gap'} for q in questions]
+        for rows in (valid[:-1], valid[:2] + [valid[0]],
+                     [dict(valid[0], question='Stale question'), *valid[1:]],
+                     [dict(valid[0], status='accepted'), *valid[1:]],
+                     [dict(valid[0], limitation_accepted='true'), *valid[1:]],
+                     [dict(valid[0], limitation_accepted=True), *valid[1:]]):
+            with self.subTest(rows=rows):
+                value['_meta']['question_status'] = rows
+                self.source.write_text(json.dumps(value))
+                evidence['definition_sha256'] = hashlib.sha256(self.source.read_bytes()).hexdigest()
+                self.evidence.write_text(json.dumps(evidence))
+                result = self.evaluate()
+                self.assertEqual(result.returncode, 1)
+                self.assertIn('INVALID_EVIDENCE', result.stderr)
+                self.assertFalse(any(c[0] == 'llm' for c in self.history()))
 
     def assert_stale_report(self, section=None):
         result = self.report(self.write_session())

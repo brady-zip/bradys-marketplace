@@ -1,7 +1,7 @@
 ---
 name: iterate-dashboard
 description: Refine a rendered Omni test dashboard through browser query-health checks and independent Gemini screenshot evaluation, producing an HTML report and completion ledger for user acceptance.
-argument-hint: "<path/to/dashboard.omni.jsonc>"
+argument-hint: "<path/to/dashboard.omni.jsonc> [--handoff PATH]"
 allowed-tools: Bash(bash:*), Bash(python3:*), Bash(chart-room:*), Bash(omni:*), Bash(llm:*), Read, Write, Edit, Task, AskUserQuestion, Skill
 ---
 
@@ -9,7 +9,8 @@ allowed-tools: Bash(bash:*), Bash(python3:*), Bash(chart-room:*), Bash(omni:*), 
 
 Read @${CLAUDE_PLUGIN_ROOT}/knowledge/workflow-contract.md,
 @${CLAUDE_PLUGIN_ROOT}/knowledge/query-evidence.md and
-@${CLAUDE_PLUGIN_ROOT}/knowledge/review-artifacts.md.
+@${CLAUDE_PLUGIN_ROOT}/knowledge/review-artifacts.md and
+@${CLAUDE_PLUGIN_ROOT}/knowledge/phase-handoff.md.
 
 ## 0. Preflight — every invocation
 
@@ -29,6 +30,9 @@ loop. Preserve selected profile, filters, time window and timezone throughout.
 
 Read the full definition and intent, audience, questions and sections. Ask for
 missing metadata or change direction, reusing the direction already supplied.
+Read and verify `--handoff PATH`, or initialize it from current source/context.
+Preserve the selected auth, user decisions, question status, query evidence and
+sharing scope; stale source or target bindings cannot prove the current revision.
 Validate with chart-room. Create a private durable session directory outside the
 repository (for example `~/.local/share/omni-dashboards/reviews/<unique-run>`), mode
 700. Use restrictive file permissions. Record CLI versions and a fresh source
@@ -53,7 +57,8 @@ ID. The production URL must never be used as the review target.
 
 Invoke the Task tool with `subagent_type="omni-dashboards:dashboard-browser"` and
 provide the exact URL, source hash, section inventory, active filters/time window,
-1440×1000 viewport and evidence directory. Ask it to attach to the existing
+per-tile query expectations, generated control map, 1440×1000 viewport and evidence
+directory. Ask it to attach to the existing
 authenticated Chrome Beta, inspect all visible states and capture every section.
 The agent discovers tool suffixes/capabilities, not one hardcoded namespace.
 
@@ -67,6 +72,15 @@ Correlate browser DOM/loading/error/empty states with the real query evidence fr
 expansion. Scroll each section into view and wait for loading to finish. Check
 filters and date defaults actually work, then restore the recorded active view.
 Never infer a query failure from blank pixels alone.
+Re-read **every on-page claim under each tested control state**, not just at rest:
+titles/subtitles, "all teams", reconciliation, denominators and scope statements.
+Use values that distinguish mapped tiles from explicitly excluded ones; observe
+both sets and resolve implicit mappings. Record misleading claims as defects,
+fix them in source, then restore and re-verify the pristine view before capture.
+Source/Gemini checks cannot prove these interactive facts. Inspect chart/card
+heights, lazy canvases and KPI subtitle overlap using the agent's standing checklist.
+Collapsed or missing visuals need source repair and another browser check before
+evaluation, even when the underlying query data is ready.
 
 Every query/sql/linked tile needs executed-query evidence, an observation timestamp
 and either ready data or a verified, accepted empty state. A blank screenshot,
@@ -94,6 +108,11 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/review.py" evaluate \
 Use the selected installed Gemini model via `--model` if different from the default
 `gemini/gemini-2.5-flash`. The helper uses `llm --no-stream --no-log`, stdin and all
 section screenshots, and sends intent, audience, questions and the active view.
+It also sends the allowlisted `_meta.question_status` context. For a limitation
+already accepted by the user, Gemini grades the clarity and usefulness of the
+partial dashboard rather than penalizing the missing data a second time. Hidden
+gaps, unsupported claims and unaccepted limitations remain defects. Final user
+acceptance and query-health gates remain separate.
 It asks about hierarchy, readability, information density, comparability, labeling
 and question coverage. It never sends the query export. Preserve exact response,
 rating, summary and suggestions; show the evaluation to the user.
@@ -129,6 +148,8 @@ reference, including on a failed/partial run. It embeds screenshots, exact
 ratings, applied/declined suggestions, query evidence, versions, phase outcomes
 and final acceptance. Link test/prod, local definition and PR if one exists. Give
 the user the report path. If reporting fails, mark FAILED and link raw artifacts.
+Update `handoff.json` with the current source binding, review/report paths, complete
+ledger and actual acceptance state, including failed or pending outcomes.
 
 Successful iteration ends at the merge-to-deploy route: source under domain
 ownership, reviewed PR and the consuming repository's deployment workflow after

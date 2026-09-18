@@ -1,8 +1,8 @@
 """Offline release-artifact check, separate from the fake-tool unit suite.
 
 Supply the recorded release binary and optionally its source schema. This runs
-only version/help/schema probes in a temporary config directory; it never calls
-Omni, Gemini, authentication or dashboard commands.
+only version/help/schema probes and offline reference validation in a temporary
+config directory; it never calls Omni, Gemini, authentication or publication.
 """
 from argparse import ArgumentParser, Namespace
 import copy
@@ -43,6 +43,12 @@ def main():
         if version != release["version"]:
             raise Blocked("VERSION_MISMATCH", "Release executable reports a different version.")
         print("PASS: " + probe.chart_room())
+        reference = json.loads(checked(probe.call([
+            "chart-room", "validate", str(ROOT / "examples/reference.omni.jsonc"),
+        ])))
+        if reference.get("outcome") != "VALIDATED" or reference.get("remote") is not False:
+            raise Blocked("REFERENCE_INVALID", "Authoring reference did not pass offline validation.")
+        print("PASS: authoring reference validates with the released executable (offline only)")
         schema = json.loads((directory / "config/omni-dashboard.schema.json").read_bytes())
         if args.source_schema:
             source_schema = json.loads(args.source_schema.read_bytes())

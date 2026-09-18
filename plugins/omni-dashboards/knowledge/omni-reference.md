@@ -132,3 +132,42 @@ Use a reviewed Git revert to restore desired content to the same production ID.
 Deleting a definition stops management and does not delete the remote dashboard.
 No API compare-and-swap lock exists in this contract: avoid concurrent UI edits
 while chart-room or deployment owns the content.
+
+## Authoring tiles that actually verify
+
+Learned from the first live test publication (2026-09-18). `chart-room test` compares
+the draft readback against the requested document, so a tile authored in a shape Omni
+rewrites can never verify. Two rules:
+
+**Set the nested `visType`, not just `chartType`.** `visConfig.chartType` alone is
+discarded: Omni returns `{"chartType": null, "fields": [], "version": 0, "visConfig":
+{"config": {}, "visType": null}}` and the tile falls back to an auto-selected vis. The
+real selector is `visConfig.visConfig.visType`, whose enum is separate from `chartType`:
+`vegalite` (line/bar/area/point charts), `omni-kpi`, `omni-table`, `basic`,
+`single-record`, `summary-value`, `funnel`, `sankey`, `treemap`, `map`, `svg-map`,
+`omni-markdown`, `omni-spreadsheet`, `spreadsheet-tab`, `omni-ai-summary-markdown`.
+Author both, e.g. `{"chartType": "line", "fields": [...], "version": 0, "visConfig":
+{"config": {}, "visType": "vegalite"}}`. An empty inner `config` is accepted.
+
+**Echo `automaticVis` explicitly on every query tile.** Omni sets `automaticVis: true`
+on tiles where it picks the visualization. chart-room 1.10.1 only strips that key from
+the readback when it equals `null`/`false`, so a definition that omits it fails
+verification on a field the author never wrote. Until chart-room treats the field as
+server-derived, carry the server's value in the definition.
+
+Start with the [authoring cookbook](authoring-cookbook.md) and
+[reference shapes](../examples/reference.omni.jsonc), then verify one rendered
+tile before expanding. For adopted content, read the published document first.
+If a failed attempt needs diagnosis, inspect its exact draft with
+`omni documents v2-get-draft <document> <draft>` and review the canonical
+differences, restoring the production `name`/`description` (chart-room re-applies
+the `[TEST]` transform) and excluding server-owned bindings such as `workbookModelId`.
+Do not deliberately fail a publish to discover shapes already in the reference.
+
+A failed verification leaves an active main draft, so the next `chart-room test` stops
+with `DRAFT_CONFLICT` by design. `omni documents discard-draft <document>` discards
+the **current main draft**, not a named draft. Preserve the failed request and
+inspect identity, digest and freshness; author/timestamp alone cannot exclude a
+subsequent edit. Follow the cookbook's recovery boundary and obtain the owner's
+decision about the concrete current draft. The proposed chart-room guarded discard
+and test dry-run commands are upstream work, not released 1.10.1 capabilities.

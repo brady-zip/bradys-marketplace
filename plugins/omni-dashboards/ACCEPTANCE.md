@@ -1,6 +1,49 @@
 # Acceptance record — updated 2026-09-18
 
-Status: plugin 260918.0 review fixes and offline verification; **live workflow acceptance pending**.
+Status: plugin 260918.1; first live run reported complete; follow-up changes verified
+offline; **revised-workflow live acceptance and upstream recovery work pending**.
+
+## First-live-run follow-up
+
+[FEEDBACK-first-live-run.md](FEEDBACK-first-live-run.md) reports the 2026-09-18 real
+dashboard run, three failed publications, eleven browser inspections and a final
+independent rating of 9/10. That is reported live evidence for the prior workflow;
+the private source-bound report, screenshots and user's acceptance were not
+re-executed or independently verified during this follow-up.
+
+Plugin 260918.1 adds the cookbook and synthetic native reference,
+representative-tile render check, standing browser checklist, generated control
+scope, filter-conditional claim review, structured phase handoff, question-status
+context for Gemini, and exact evidence-set documentation. Existing preflight,
+executed-query, source/screenshot binding, rating and final acceptance gates remain.
+
+All **53 stdlib tests passed in 33.852 seconds**. The installed chart-room 1.10.1
+binary matched the recorded release SHA-256 and passed all five compatibility
+checks, including offline validation of `examples/reference.omni.jsonc`. The
+reference contains synthetic IDs/fields and has not been published or rendered as
+a complete dashboard; copying live-derived shapes is not live acceptance.
+No remote dashboard mutations or Gemini calls were made for these checks.
+Both strict Claude manifest validations, Python/shell syntax, portable-reference
+checks and `git diff --check` passed. All five skill frontmatters and the browser
+agent YAML were checked. The generic Codex skill validator does not recognize
+Claude's existing `argument-hint`; its common-field checks passed with that field
+excluded in temporary copies, and the field's string shape was checked separately.
+
+| Feedback / remaining gate | Current outcome |
+|---|---|
+| P0-1, P0-3, P0-4 | Cookbook/reference, one-tile browser check and explicit evidence boundaries implemented; revised live-run measurements pending. |
+| P0-2 automaticVis | Existing upstream source patch confirmed locally. Released 1.10.1 still needs the documented echo workaround; accept a later release only after artifact/schema verification. |
+| P0-2 retry recovery | Guarded named-draft discard and test dry-run are not available in verified 1.10.1 and remain chart-room work. Raw Omni discard acts on the current main draft and is not an automatic retry. |
+| P1-1 through P1-5 | Browser checklist, conditional claims, programmatic control descriptions, accepted-limitation evaluator context and JSON handoff implemented; live behavior still requires exercise. |
+| P2 evidence/layout | Exact tile/section coverage and recapture rules documented; height, title, subtitle and subset-stacking checks added to authoring/browser guidance. An upstream layout linter remains optional work. |
+| Release efficiency | Track deliberate representative/final publications separately from failures/rework. A fresh multi-tile expansion now requires two intentional test publications; the original one-publication total target conflicts with the requested early check. Target zero failed publications and one or two ratings; verify inspection counts in a new run. |
+
+The previous version/evidence record below is historical. Version 260918.1 is
+recorded in both manifests for this source publication. No chart-room release,
+plugin installation or remote dashboard publication was performed by this follow-up.
+
+## Previous 260918.0 offline review
+
 No Omni documents, folders, drafts, roles, policies, credentials or CI secrets were
 created or changed during this review-fix work. No paid Gemini calls were made.
 The reviewed plugin baseline is `d1955b1a4bcf41a42abbfefcdf198f7ac0587b96`;
@@ -80,7 +123,7 @@ This closes release coordination and offline interoperability, not the plugin's
 live create/expand/review workflow. Repeat the artifact check before accepting any
 later release; this evidence does not automatically carry forward to a new binary.
 
-## Live completion ledger
+## Pre-first-run completion ledger (historical)
 
 | Phase | Status | Reason / next evidence |
 |---|---|---|
@@ -98,7 +141,7 @@ later release; this evidence does not automatically carry forward to a new binar
 | Final user acceptance | SKIPPED | Requires real current-source review and user response. |
 | Evergreen deployment | SKIPPED | Separate workstream owns automation identity, runner/network access, production/revert and CI activation acceptance. |
 
-Select the approved pair and profile, run the five-skill
+For the revised workflow, select the approved pair and profile, run the five-skill
 workflow, record actual chart-room/Omni/llm/Gemini versions, source digest, query
 health, test publication readback, screenshots, rating history and all phase
 outcomes. Exercise successful content and a missing-data gap. Preserve test-only

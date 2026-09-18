@@ -8,9 +8,11 @@ report and ends at a reviewed merge-to-deploy route.
 **Implementation status:** packaged for Claude Code, with offline regression tests.
 Schema compatibility was verified on 2026-09-18 against the checksum-matched
 chart-room v1.10.1 release executable, including the upstream review fixes.
-Live plugin acceptance still requires authorized personal API access and an
-approved disposable dashboard pair. See [ACCEPTANCE.md](ACCEPTANCE.md) for the tested
-artifact and remaining gates.
+The [first live-run feedback](FEEDBACK-first-live-run.md) reports a completed real
+dashboard and final independent rating of 9/10, with substantial authoring/review
+rework. The follow-up adds reference shapes and earlier rendering checks; live
+acceptance of this revised workflow remains pending. See [ACCEPTANCE.md](ACCEPTANCE.md)
+for historical evidence, current checks and remaining upstream release work.
 
 ## Install
 
@@ -117,8 +119,9 @@ New-pair provisioning publishes its initial documents immediately, so the exact
 model and prod/test folders must already be approved before running it.
 
 Expand inventories semantic fields and existing tiles, executes bounded queries,
-records unanswered questions and authors only backed content. It validates native
-Omni configuration, uploads to test and explicitly invokes iterate. Missing data
+records unanswered questions and first authors one representative backed tile.
+It publishes that tile to test and verifies visible rendering through the browser
+agent before completing the remaining content and invoking iterate. Missing data
 or semantic work becomes a concrete owner handoff, not a model/schema edit or a
 plausible-looking empty tile.
 
@@ -135,6 +138,12 @@ DONE, SKIPPED or FAILED and a reason for every phase. If create cannot invoke
 expand, it explicitly reports both the missing expansion and skipped iteration.
 Read the [workflow contract](knowledge/workflow-contract.md) for deferred probes
 and the distinction between dependency health and completed work.
+
+Create, expand and iterate read/write a private [structured handoff](knowledge/phase-handoff.md)
+containing the source digest, selected auth, targets, decisions and evidence. The
+browser agent checks geometry, lazy charts, expected values and claims under each
+tested control state. Gemini receives recorded question status so accepted data
+limitations are evaluated for clarity; hidden gaps and broken tiles remain defects.
 
 ## Authoring commands
 
@@ -163,6 +172,15 @@ validation is not executed-query evidence. Contract v1 supports blank/query/sql/
 tiles; unsupported workbook-local models, uploads, apps and other dependent
 resources are blockers. See [Omni reference](knowledge/omni-reference.md) and
 [query evidence](knowledge/query-evidence.md).
+
+Start with the [authoring cookbook](knowledge/authoring-cookbook.md) and
+[reference definition](examples/reference.omni.jsonc). Copy the native shapes,
+preserve your initialized targets and discover real model fields. The reference
+is synthetic and offline validated; it is not a live dashboard acceptance receipt.
+Generate scope sentences after control edits with
+`python3 plugins/omni-dashboards/scripts/explain-controls.py FILE`.
+The cookbook covers the released 1.10.1 `automaticVis` workaround and draft recovery.
+Guarded draft discard and test dry-run remain upstream requests.
 
 ## Reports and deployment
 
@@ -209,8 +227,9 @@ fixtures test broken queries, missing data, malformed ratings, stale screenshots
 skipped handoffs and report acceptance. Packaging tests verify metadata agreement,
 portable references, workflow transitions and absence of legacy commands.
 The compatibility check is separate from the fake-tool suite. It verifies the
-recorded release asset checksum, runs the real version/help/schema preflight in
-a temporary config directory, compares the optional source schema, and rejects a
+recorded release asset checksum, runs the real version/help/schema preflight and
+validates the authoring reference offline in a temporary config directory,
+compares the optional source schema, and rejects a
 changed native constraint. It downloads nothing, disables updates and makes no
 authenticated or Gemini calls. Omit `--source-schema` when only the release binary
 is available. Repeat it for any later chart-room artifact before updating

@@ -41,6 +41,22 @@ PR-required publishing rather than bypassing it. Setup cannot mint credentials,
 grant roles or enable AccessBoost. CI `OMNI_DASHBOARD_DEPLOY_TOKEN` stays separate
 from personal auth; the plugin never configures CI secrets.
 
+## Evidence boundaries
+
+| Evidence | Proves | Does not prove |
+|---|---|---|
+| `VALIDATED` | The source satisfies the native schema and local invariants. | A query ran or a chart is visible. |
+| `REMOTE_VALIDATED` / `PLAN_VALIDATED` | Omni accepted the query plan. | Returned data; retain `queryResultsVerified: false`. |
+| Executed query and semantic checks | Actual results, grain, units and window for the recorded identity/view. | Layout, title visibility or control behavior in the browser. |
+| `UPDATED`, `verified:true` | Draft and published content matched the requested definition. | Readable rendered charts or correct claims under changed controls. |
+| Current browser observations | Visible content and behavior in the states actually inspected. | Other control states or queries the browser agent did not execute. |
+
+**Schema-valid does not mean renders.** In the first live run, offline validation,
+7/7 plan validations and verified publication all passed while charts were blank
+whitespace. Expansion now checks one representative tile before authoring the rest;
+iteration checks every tile and filter-conditional claim. Follow the
+[cookbook](authoring-cookbook.md) and [structured handoff](phase-handoff.md).
+
 ## Completion ledger
 
 Every skill prints every phase in order, including phases never reached, using

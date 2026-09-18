@@ -29,10 +29,14 @@ auth context without disclosing credentials.
    field identifiers; never turn the illustrative metadata into a query.
 2. Set a short representative date range, verified row limit, selected fields,
    filters and timezone. Bound scanning with filters, not just output size. Preserve
-   the agreed grain. Select `resultType: "json"` to receive result rows and leave
-   `planOnly` false. A default NDJSON job stream instead requires complete job/footer
-   checks; HTTP success alone does not mean the job completed. Follow pinned response
-   schemas. `chart-room validate --remote` supplies plan evidence only.
+   the agreed grain and leave `planOnly` false. The default NDJSON job stream needs
+   complete job/footer checks; HTTP success alone does not mean the job completed.
+   `resultType: "json"` can simplify successful rows but can hide a real error behind
+   `Unable to parse data stream`. On that diagnostic, rerun the same bounded query
+   without `resultType` to inspect the actual job/error stream; do not treat the
+   wrapper error or the retry as success. Follow pinned response schemas.
+   `chart-room validate --remote` supplies plan evidence only. Native filter/sort
+   shapes and aggregation traps are in [the cookbook](authoring-cookbook.md).
 3. Send the JSON via `--body @query.json` or `--body -` on stdin, with selected profile
    and fixed Zip base URL. Do not pass credentials or interpolate field content into
    shell commands. Do not enable warehouse refresh/rebuild operations for sampling.
@@ -61,3 +65,18 @@ Publication, executed data checks and rendered behavior are separate evidence.
 Inspect loading/alerts/control behavior and query outcomes before Gemini sees the
 screenshots. Blank pixels alone are not a query-health signal. A valid expected
 empty state needs a confirmed reason, clear labeling and explicit acceptance.
+
+## Claims under controls
+
+Derive scope documentation from `controls.map` with `scripts/explain-controls.py`;
+an absent entry is not the same as explicit `false`. Compare the headline, table
+and chart scopes before claiming reconciliation. Re-read all titles, subtitles,
+totals, denominator and "all teams" claims under each tested control state, then
+restore and re-verify the original view. Record mapped and excluded tile behavior
+and any state still unknown. Query correctness at rest does not establish truth
+after a filter moves. Do not stack a total and its subset as additive measures.
+
+For partial dashboards, record the question's status/reason and the user's actual
+limitation decision in `_meta.question_status` (see `review-artifacts.md`). Display
+that status and its implications on the page. Missing metrics remain missing;
+accepting a question limitation never waives execution evidence for displayed tiles.
