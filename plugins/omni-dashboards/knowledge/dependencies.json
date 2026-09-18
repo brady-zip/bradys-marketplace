@@ -1,0 +1,11 @@
+{
+  "chart_room_min_version": "1.10.0",
+  "contract_version": 1,
+  "schema_id": "https://raw.githubusercontent.com/brady-zip/chart-room/v1.10.0/schema/omni-dashboard.schema.json",
+  "schema_sha256": "e5214d44fe6e13f06bab1d2ea4674f2dadd7a2249e395c2553e28275e639e9fc",
+  "schema_hash_encoding": "UTF-8 JSON, sorted keys, compact separators, ensure_ascii=false",
+  "openapi_sha256": "12a9bc485e8bcd3d09c2a7cff646e0cd2c2090eb83899c860d31829d426e5a94",
+  "omni_cli_version": "1.3.1",
+  "gemini_model": "gemini/gemini-2.5-flash",
+  "chrome_binary": "/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta"
+}

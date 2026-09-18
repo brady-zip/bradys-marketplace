@@ -1,0 +1,15 @@
+{
+  "omni-dashboard-viewer": {
+    "command": "mise",
+    "args": [
+      "x",
+      "node@22",
+      "--",
+      "npx",
+      "-y",
+      "chrome-devtools-mcp@latest",
+      "--autoConnect",
+      "--channel=beta"
+    ]
+  }
+}

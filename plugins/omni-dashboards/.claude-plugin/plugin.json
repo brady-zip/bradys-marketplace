@@ -1,0 +1,9 @@
+{
+  "name": "omni-dashboards",
+  "description": "Create, expand, and review Omni dashboards with verified queries, chart-room test publication, independent Gemini evaluation, and completion ledgers",
+  "version": "260917.0",
+  "author": {
+    "name": "Brady Watkinson",
+    "email": "brady@local"
+  }
+}

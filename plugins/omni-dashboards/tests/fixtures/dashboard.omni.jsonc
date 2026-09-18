@@ -1,0 +1,32 @@
+{
+  // Offline fixture only: no remote objects exist for these identifiers.
+  "version": 1,
+  "provider": "omni",
+  "instance": "https://zip.omniapp.co",
+  "targets": {"prod": "fixture-prod", "test": "fixture-test"},
+  "_meta": {
+    "intent": "Compare verified fixture activity over time",
+    "audience": "Offline test runner",
+    "scope": "Synthetic fixture, no live data",
+    "questions": ["How much?", "When?", "Which group?"],
+    "sections": [{"id": "overview", "title": "Overview"}]
+  },
+  "document": {
+    "name": "Offline fixture",
+    "description": "Never publish this synthetic fixture",
+    "modelId": "00000000-0000-4000-8000-000000000001",
+    "queryPresentations": {
+      "data": {"1": {"type": "blank", "name": "Notes"}},
+      "order": ["1"]
+    },
+    "controls": {"data": {}, "order": []},
+    "settings": {
+      "crossfilterEnabled": false,
+      "customText": null,
+      "facetFilters": true,
+      "refreshInterval": null,
+      "runQueriesOn": "current-page"
+    },
+    "containers": [{"containerType": "stack", "instanceKey": "root", "children": []}]
+  }
+}
