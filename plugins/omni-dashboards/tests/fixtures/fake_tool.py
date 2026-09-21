@@ -23,7 +23,7 @@ if name == 'chart-room':
     target = Path(os.environ['CHART_ROOM_CONFIG_DIR']) / 'omni-dashboard.schema.json'
     target.write_bytes(Path(os.environ['FAKE_SCHEMA']).read_bytes())
     if '--version' in args:
-        print({'old_chart_room': '1.9.0', 'chart_room_before_fixes': '1.10.0'}.get(scenario, '1.10.1'))
+        print({'old_chart_room': '1.9.0', 'chart_room_before_fixes': '1.10.0'}.get(scenario, '1.10.2'))
     elif '--help' in args:
         print('--provider --profile --format --model --prod-folder --test-folder --remote --json omni validate import models topics fields status login')
     elif args[0] == 'validate':

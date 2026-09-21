@@ -1,3 +1,17 @@
+# Release dependency update, 2026-09-21
+
+Plugin 260921.0 requires chart-room 1.10.2, commit ddf9e7d64866c7395c50901eb2e51e483ebc6a82.
+The release workflow passed 103 tests and typechecking. The macOS asset SHA-256
+is b178e90eeac35832612ca5b14234838227d3b1c33e0d1b1b1ef9b50a0a1ea509.
+The previous automaticVis workaround is superseded for unauthored values.
+Guarded draft cleanup and test dry-run remain separate work.
+
+Raw SQL execution and aggregation were verified against real coverage data via
+query.userEditedSQL. This does not resolve missing measurement provenance or
+establish acceptance of the pending correlation dashboard.
+
+The records below describe earlier versions and their then-current limitations.
+
 # Acceptance record — updated 2026-09-18
 
 Status: plugin 260918.1; first live run reported complete; follow-up changes verified

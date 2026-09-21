@@ -49,20 +49,13 @@ The date-bound convention also appears in Omni's official
 shapes are checked against the exact schema pinned in `dependencies.json`; the
 rendering observations above come from [the first live run](../FEEDBACK-first-live-run.md).
 
-## Chart-room 1.10.1 verification and recovery
+## Chart-room 1.10.2 verification and recovery
 
-Omni can return `automaticVis:true` even when the source omits it. Released 1.10.1
-does not normalize that unauthored true value away. The reference echoes the
-observed values for its shapes: true for KPI/line/bar, false for table/single-record.
-These are observed values, not a universal chart-type rule. For adopted tiles,
-preserve the actual published value; after a mismatch, inspect the exact failed
-draft readback. Do not copy a mismatching field blindly or relax other comparisons.
-When adopting canonical document content, restore the production name/description
-and exclude server-owned query model bindings such as `workbookModelId`.
-
-An upstream patch to ignore unauthored `automaticVis` exists, but release and
-artifact compatibility must be verified before dropping this workaround. The
-plugin's minimum remains 1.10.1 until that release is accepted.
+Omni can return `automaticVis:true` when the source omits it. Released 1.10.2
+normalizes that server-selected value only when it is unauthored. Explicit
+`automaticVis` values must still match readback. Omit it for new tiles unless
+there is a deliberate requirement; inspect rendered native `visConfig` through
+the browser. The reference's explicit values remain shape-specific observations.
 
 A failed verification can leave a main draft and cause `DRAFT_CONFLICT` on retry.
 Stop, preserve the failed request/digest and draft identifier, and read the draft
@@ -76,7 +69,7 @@ permission to retry an ambiguous write blindly.
 Upstream follow-up: a guarded `chart-room test --discard-draft IDENTIFIER` must
 match the failed attempt's author, request digest and `draftOutOfDate:false`, and
 refuse a different/changed draft; `test --dry-run` should expose the batch plan.
-Neither option exists in the verified 1.10.1 executable. Local validation and
+Neither option exists in the verified 1.10.2 executable. Local validation and
 `validate --remote` (plans only) are the available checks before a test write.
 
 ## Control scope and truthful labels
@@ -103,3 +96,16 @@ their windows and control scopes match. A total and its filtered subset must not
 be stacked as additive series; use separate/grouped series or a verified disjoint
 remainder. Inspect long KPI subtitles at readable scale: overflowing rows can
 overprint measure labels even when the outer card has a valid height.
+
+## SQL aggregation without shared-model edits
+
+The official CLI supports executed raw SQL through `query.userEditedSQL`, with
+all ten required query members and qualified output fields. Use a named CTE and
+matching `query.table`/`query.fields` identifiers. A top-level `sql` body is not
+the query-run contract. Empty JSON objects are not successful projected-data
+evidence; verify returned field names and values. Bind a finite date range in SQL.
+
+Dimension-only semantic views can be aggregated by SQL; missing predefined
+measures alone do not prove a model change is required. SQL does not resolve
+ambiguous measurement grain. Preserve missing/ambiguous values and verify source
+identities before joining aggregate datasets.

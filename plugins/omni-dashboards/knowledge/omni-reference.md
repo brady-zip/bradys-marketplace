@@ -3,7 +3,7 @@
 The interoperability source is Evergreen's `bin/ci/omni_dashboards/handoffs/contract.md`,
 `chart-room-handoff.md`, and `deployment.md` (read 2026-09-17). The implementation
 pins are machine-readable in [dependencies.json](dependencies.json). chart-room
-1.10.1 is the minimum accepted version. On 2026-09-18 the actual v1.10.1
+1.10.2 is the minimum accepted version. The 2026-09-21 release adds normalization of unauthored `automaticVis`; explicit values still compare exactly. On 2026-09-18 the actual v1.10.1
 release executable passed schema compatibility against commit
 `66c29d7cde1c5585b43ddb554fd3dd7c4a405837`. It includes the filter-clearing,
 completion and machine-output review fixes. Its schema and v1.10.0 `$id` are
@@ -149,11 +149,9 @@ real selector is `visConfig.visConfig.visType`, whose enum is separate from `cha
 Author both, e.g. `{"chartType": "line", "fields": [...], "version": 0, "visConfig":
 {"config": {}, "visType": "vegalite"}}`. An empty inner `config` is accepted.
 
-**Echo `automaticVis` explicitly on every query tile.** Omni sets `automaticVis: true`
-on tiles where it picks the visualization. chart-room 1.10.1 only strips that key from
-the readback when it equals `null`/`false`, so a definition that omits it fails
-verification on a field the author never wrote. Until chart-room treats the field as
-server-derived, carry the server's value in the definition.
+Chart-room 1.10.2 ignores server-derived `automaticVis` only when it is omitted
+from the source. Explicit authored values still must match. For new tiles, omit
+it unless selection is intentional; verify the native visualization in the browser.
 
 Start with the [authoring cookbook](authoring-cookbook.md) and
 [reference shapes](../examples/reference.omni.jsonc), then verify one rendered
@@ -170,4 +168,4 @@ the **current main draft**, not a named draft. Preserve the failed request and
 inspect identity, digest and freshness; author/timestamp alone cannot exclude a
 subsequent edit. Follow the cookbook's recovery boundary and obtain the owner's
 decision about the concrete current draft. The proposed chart-room guarded discard
-and test dry-run commands are upstream work, not released 1.10.1 capabilities.
+and test dry-run commands are upstream work, not released 1.10.2 capabilities.

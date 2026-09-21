@@ -146,7 +146,7 @@ Require successful draft and published readback and capture the exact test URL.
 Confirm the target ID is the test ID and production was not updated. Failed or
 ambiguous writes stop the workflow; preserve recovery identifiers. Never delete
 someone's draft or retry a possibly successful write automatically.
-Use the cookbook's 1.10.1 `automaticVis` workaround and failed-draft recovery
+Use the cookbook's 1.10.2 `automaticVis` normalization guidance and failed-draft recovery
 guidance. Do not invoke the proposed `test --dry-run` or `--discard-draft` options
 unless a later verified release actually supports them.
 

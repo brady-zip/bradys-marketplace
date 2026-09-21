@@ -7,7 +7,7 @@ report and ends at a reviewed merge-to-deploy route.
 
 **Implementation status:** packaged for Claude Code, with offline regression tests.
 Schema compatibility was verified on 2026-09-18 against the checksum-matched
-chart-room v1.10.1 release executable, including the upstream review fixes.
+chart-room v1.10.2 release executable, including the upstream review fixes.
 The [first live-run feedback](FEEDBACK-first-live-run.md) reports a completed real
 dashboard and final independent rating of 9/10, with substantial authoring/review
 rework. The follow-up adds reference shapes and earlier rendering checks; live
@@ -67,7 +67,7 @@ Setup can install ordinary dependencies. Official Omni CLI 1.3.1 is installed fr
 its checksum-verified macOS release; an existing different CLI is not overwritten.
 It preserves installed llm plugins and uses persistent llm with llm-gemini. It
 installs mise/Node 22 as needed. Chart-room must be a **released** Omni-capable
-1.10.1+ build whose native schema matches [dependencies.json](knowledge/dependencies.json).
+1.10.2+ build whose native schema matches [dependencies.json](knowledge/dependencies.json).
 Its presence or version string alone is insufficient. The exact schema content is
 hashed using sorted, compact UTF-8 JSON so generator escaping/formatting does not
 create a false mismatch. Schema changes require a deliberate compatibility update.
@@ -179,7 +179,7 @@ preserve your initialized targets and discover real model fields. The reference
 is synthetic and offline validated; it is not a live dashboard acceptance receipt.
 Generate scope sentences after control edits with
 `python3 plugins/omni-dashboards/scripts/explain-controls.py FILE`.
-The cookbook covers the released 1.10.1 `automaticVis` workaround and draft recovery.
+The cookbook covers the released 1.10.2 `automaticVis` normalization and draft recovery.
 Guarded draft discard and test dry-run remain upstream requests.
 
 ## Reports and deployment

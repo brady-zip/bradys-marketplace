@@ -119,7 +119,7 @@ class PreflightTests(Harness):
                 result, report = self.preflight(scenario=scenario)
                 self.assertEqual(result.returncode, 1)
                 self.assert_code(report, 'OUTDATED_CHART_ROOM')
-                self.assertIn('1.10.1+', result.stdout)
+                self.assertIn('1.10.2+', result.stdout)
 
     def test_outdated_official_capabilities_precede_auth(self):
         for scenario, code in [('old_omni', 'OUTDATED_OMNI_CLI'), ('outdated', 'OUTDATED_CAPABILITIES')]:
