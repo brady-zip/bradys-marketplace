@@ -133,16 +133,16 @@ class TestContextMainIntegration:
         ):
             result = _capture_output(hooks.context_main, stdin_data)
 
-        assert result["continue"] is True
-        assert result["suppressOutput"] is True
         # Seeded memories should be found — skip if LLM non-determinism
         # caused infer=True to extract zero facts during seeding.
-        if "additionalContext" not in result:
+        hook_output = result.get("hookSpecificOutput", {})
+        if "additionalContext" not in hook_output:
             pytest.skip(
                 "Seeded memories not found in search (LLM non-determinism); "
                 "re-run to verify"
             )
-        ctx = result["additionalContext"]
+        assert hook_output["hookEventName"] == "SessionStart"
+        ctx = hook_output["additionalContext"]
         assert "# mem0 Cross-Session Memory" in ctx
         # At least one numbered memory line
         assert any(line.strip() and line.strip()[0].isdigit() for line in ctx.split("\n"))
