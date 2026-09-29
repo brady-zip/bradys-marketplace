@@ -1,6 +1,6 @@
 ---
 name: create-dashboard
-description: Create or adopt an Omni dashboard from intent, select an existing shared model and topic, then explicitly invoke expansion and independent visual review. Use for dashboard content, not semantic-model development.
+description: Create or adopt an Omni dashboard from intent, discover its shared model and topic, route missing warehouse sources to create-data-source when in scope, then invoke expansion and independent visual review.
 argument-hint: "[business topic or existing dashboard URL] [--handoff PATH]"
 allowed-tools: Bash(bash:*), Bash(python3:*), Bash(chart-room:*), Bash(omni:*), Read, Write, Edit, AskUserQuestion, Skill
 ---
@@ -45,8 +45,19 @@ bash "${CLAUDE_PLUGIN_ROOT}/scripts/preflight.sh" --skill create --profile PROFI
 Omit `--profile` consistently when using `OMNI_API_TOKEN`. Select an existing shared
 model/topic based on actual discovery. Verify model permissions, not just web login.
 An inaccessible model is not an empty catalog. Follow error classification in the
-reference; no guessed field names or shared-model edits. Unsupported workbook-local
+reference; no guessed field names or inline shared-model edits. Unsupported workbook-local
 models, upload-backed content or apps require a separate owner handoff.
+
+If complete successful discovery shows a missing topic/source needed for the
+intent, read @${CLAUDE_PLUGIN_ROOT}/knowledge/data-source-authoring.md. When source
+creation is already in scope, invoke
+`Skill(skill="omni-dashboards:create-data-source", args="Source requirement --repo /absolute/consuming/repo --handoff /absolute/private/handoff.json")`.
+Otherwise record the concrete requirement and obtain only the missing source-work
+scope. The source skill returns to this caller. Recheck topic/fields and actual
+Omni execution before continuing; code ready with deployment/exposure pending
+does not establish a usable topic. An inaccessible model follows access recovery,
+not source creation. Local source preparation can proceed independently of a
+blocked Omni preflight when authorized; dashboard initialization still waits.
 
 ## 3. Agree on structure and provisioning
 

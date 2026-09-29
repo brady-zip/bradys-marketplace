@@ -1,6 +1,6 @@
 ---
 name: expand-dashboard
-description: Expand an existing Omni dashboard with tiles backed by discovered semantic fields and executed representative queries, then invoke browser and Gemini iteration. Does not edit shared models or warehouse schemas.
+description: Expand an Omni dashboard with discovered fields and executed queries, route missing sources to create-data-source when in scope, then invoke browser and Gemini iteration. Warehouse and model edits use their own workflow.
 argument-hint: "<path/to/dashboard.omni.jsonc> [--handoff PATH]"
 allowed-tools: Bash(bash:*), Bash(python3:*), Bash(chart-room:*), Bash(omni:*), Read, Write, Edit, Grep, Glob, Task, AskUserQuestion, Skill
 ---
@@ -76,8 +76,16 @@ A missing metric must not become a plausible-looking zero or empty tile.
 Map each question to evidence and mark it backed, missing, inaccessible, empty or
 failed. Create a concrete separate handoff for missing model/data work: question,
 expected measure/grain/denominator, verified missing resource, target model/topic,
-owner and acceptance query/result. Do not modify shared models, warehouse schemas
-or instrumentation in this dashboard-only workflow. Do not create/send a ticket
+owner and acceptance query/result. Read
+@${CLAUDE_PLUGIN_ROOT}/knowledge/data-source-authoring.md for source authoring.
+When the user has included missing-source creation in scope, actually invoke
+`Skill(skill="omni-dashboards:create-data-source", args="Source requirement --repo /absolute/consuming/repo --handoff /absolute/private/handoff.json")`.
+Reuse the existing scope decision; otherwise obtain the additional source-work
+scope for the concrete requirement. The source skill returns to this caller.
+Rediscover fields and rerun bounded queries after deployment/exposure, then update
+the inventory and question evidence. Code ready with live gates pending remains
+a gap. Keep shared-model, warehouse and instrumentation edits in their supported
+workflow rather than making them inline. Do not create/send a ticket
 or message unless the invoked workflow explicitly requests posting.
 
 Explain how unanswered questions affect usefulness. If sufficient backed content

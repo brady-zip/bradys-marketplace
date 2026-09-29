@@ -9,7 +9,7 @@ behavior. Comparable series need the same window, grain and units.
 
 | Observation | Classification | Action |
 |---|---|---|
-| Successful complete field/topic discovery lacks the requested field | NONEXISTENT_FIELD | Create an owner handoff with the question, desired definition and acceptance query; no invented tile. |
+| Successful complete field/topic discovery lacks the requested field | NONEXISTENT_FIELD | Record the requirement; use create-data-source when source work is in scope, otherwise prepare an owner handoff. Check warehouse versus model exposure before creating a table; no invented tile. |
 | 401 or expired credential | UNAUTHENTICATED | Stop discovery/query work; official credential refresh. Never interpret as an empty catalog. |
 | 403, model omitted from resolved roles, or inaccessible shared model | MODEL_INACCESSIBLE | Ask the owner for appropriate access or an accessible existing model. |
 | 404 on model/target | NOT_FOUND_OR_HIDDEN | Confirm identity and owner visibility before calling it nonexistent. |
@@ -49,7 +49,10 @@ auth context without disclosing credentials.
 For a missing-data handoff include an accountable owner, question, discovered
 model/topic, missing field/measure or failed upstream behavior, expected aggregation
 and grain, denominator/null/timezone rules, minimal reproducible query and a concrete
-acceptance condition. Do not edit their model/schema/instrumentation here. A file
+acceptance condition. Use [source authoring](data-source-authoring.md) and
+`omni-dashboards:create-data-source` for authorized warehouse/pipeline work;
+model/schema/instrumentation work follows its owning workflow. Rediscover and
+execute Omni queries after readiness before marking the question backed. A file
 prepared for the owner is not authorization to send them a message.
 
 ## Layout choices

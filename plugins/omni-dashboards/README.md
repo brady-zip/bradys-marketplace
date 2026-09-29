@@ -1,11 +1,14 @@
 # omni-dashboards
 
-Create, expand and review Omni dashboards with intent discovery, executed query
-evidence, chart-room test publication and independent Gemini screenshot review.
+Create warehouse data sources, then create, expand and review Omni dashboards
+with intent discovery, executed query evidence, chart-room test publication and
+independent Gemini screenshot review.
 Each skill reports a completion ledger. Iteration produces a self-contained HTML
 report and ends at a reviewed merge-to-deploy route.
 
 **Implementation status:** packaged for Claude Code, with offline regression tests.
+Version 260929.0 adds source authoring based on Evergreen PR #135308; actual
+warehouse deployment and Omni exposure remain separate live acceptance gates.
 Schema compatibility was verified on 2026-09-18 against the checksum-matched
 chart-room v1.10.2 release executable, including the upstream review fixes.
 The [first live-run feedback](FEEDBACK-first-live-run.md) reports a completed real
@@ -106,11 +109,22 @@ publication policy. Personal auth is separate from CI's deployment credential.
 ## Workflows
 
 ```text
+/omni-dashboards:create-data-source Daily product adoption counts --repo /path/to/evergreen
 /omni-dashboards:create-dashboard Weekly revenue performance
 /omni-dashboards:expand-dashboard path/to/revenue.omni.jsonc
 /omni-dashboards:iterate-dashboard path/to/revenue.omni.jsonc
 /omni-dashboards:doctor path/to/revenue.omni.jsonc
 ```
+
+Create-data-source implements warehouse SQL and its scheduled pipeline in the
+consuming repository. For Evergreen it follows the Snowflake/Airflow registration
+pattern in [PR #135308](https://github.com/Greenbax/evergreen/pull/135308/changes),
+including upstream readiness dependencies and the data DAG inventory. It verifies
+grain, enums, deletion/current-state semantics and count reconciliation. Local code
+authoring needs the repository toolchain; dashboard tooling and credentials are
+needed only for dependent Omni checks. It reports code readiness, actual deployment
+and Omni query readiness separately. See [source authoring](knowledge/data-source-authoring.md).
+This creates analytics tables/views and pipelines, not Omni connection credentials.
 
 Create records 3–5 questions, audience, scope and owner; selects an existing model
 and topic; agrees on grain, dates/timezone, filters and sections; initializes or
@@ -122,8 +136,10 @@ Expand inventories semantic fields and existing tiles, executes bounded queries,
 records unanswered questions and first authors one representative backed tile.
 It publishes that tile to test and verifies visible rendering through the browser
 agent before completing the remaining content and invoking iterate. Missing data
-or semantic work becomes a concrete owner handoff, not a model/schema edit or a
-plausible-looking empty tile.
+or semantic work becomes a concrete requirement. When source creation is in the
+user’s scope, create/expand invokes create-data-source and resumes after actual
+deployment/exposure and query checks. Otherwise it prepares an owner handoff.
+A pending source never becomes a plausible-looking empty tile.
 
 Iterate verifies the exact test hostname/ID, actual loading/error/empty states,
 control behavior and query evidence, then captures every section. The installed
@@ -133,7 +149,9 @@ healthy rating ≥7 or five completed passes; reaching five below 7 is **not a p
 Unavailable Gemini or malformed ratings stop evaluation without an author score.
 User acceptance remains a separate recorded decision.
 
-Every skill runs preflight on every invocation. The completion ledger contains
+Dashboard/setup/doctor skills run dashboard preflight on every invocation;
+create-data-source starts with repository preflight and defers remote diagnostics
+until dependent Omni work. The completion ledger contains
 DONE, SKIPPED or FAILED and a reason for every phase. If create cannot invoke
 expand, it explicitly reports both the missing expansion and skipped iteration.
 Read the [workflow contract](knowledge/workflow-contract.md) for deferred probes

@@ -74,11 +74,16 @@ values, and all five native settings. Remove a key to delete it; do not author
 null deletion tombstones. Linked tiles need their supported source dependencies.
 The schema must preserve native visualization configuration through publication.
 
-Unsupported: apps, base-model changes, branch/draft-bound query models, workbook-local
+Unsupported in the dashboard document contract: apps, base-model changes, branch/draft-bound query models, workbook-local
 semantic extensions, uploads, foreign tabs, dataset/dbt/query-view edits and query
 binding changes. Keep unsupported existing content in Omni and hand its migration
 to the owner. Do not flatten it, silently omit it, change shared models, or claim
 that arbitrary workbook exports are portable dashboards.
+
+Warehouse sources and their Airflow pipelines can be authored separately through
+`omni-dashboards:create-data-source`; see [source authoring](data-source-authoring.md).
+This does not broaden chart-room's document contract. Shared-model exposure follows
+the consuming repository's supported model workflow and its authorization scope.
 
 ## Official command surfaces
 

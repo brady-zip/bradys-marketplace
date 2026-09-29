@@ -43,6 +43,11 @@ Start pass counting at **1**. Use `_meta.gemini_stop_limit`, default **5**, as t
 maximum number of completed Gemini evaluations. A failed query is not a completed
 evaluation; allow at most two focused query-repair attempts before reporting its
 owner handoff. Avoid an unbounded repair loop outside the five-pass limit.
+If a verified failure requires new warehouse data, carry its concrete requirement
+to `omni-dashboards:create-data-source` using the existing handoff when source work
+is authorized. Pending source deployment/exposure blocks the affected tile and
+Gemini; after readiness, resume expansion to rerun queries and republish before
+starting a fresh review. Source authoring does not count as a Gemini evaluation.
 
 Before any screenshot leaves the machine, follow the organization's Gemini rules
 for internal dashboards and record the permitted scope. The user chose screenshot

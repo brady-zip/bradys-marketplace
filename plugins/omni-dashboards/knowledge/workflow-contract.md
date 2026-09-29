@@ -1,8 +1,16 @@
 # Preflight, completion and authority
 
-Every skill injects preflight on **every invocation**, including handoffs. A manual
-run is required if injection is missing. Inline `|| true` keeps error detail in the
+Dashboard, setup and doctor skills inject preflight on **every invocation**,
+including handoffs. A manual run is required if injection is missing.
+Inline `|| true` keeps error detail in the
 skill context; it never turns failure into permission to proceed.
+
+`create-data-source` starts with consuming-repository/toolchain preflight. Local
+SQL/DAG work does not depend on dashboard credentials, chart-room, Chrome or
+Gemini. Before its Omni exposure/query checks, run the dashboard diagnostic for
+the selected profile/model. A failed remote dependency blocks its dependent work,
+not independent authorized source-code preparation. Source-only work prints its
+own ledger without requiring a dashboard definition or HTML report.
 
 Preflight is deliberately read-only. Setup owns dependency repair. It probes CLI
 help/schema before authentication, checks the pinned Omni transport and chart-room
@@ -62,13 +70,18 @@ iteration checks every tile and filter-conditional claim. Follow the
 Every skill prints every phase in order, including phases never reached, using
 DONE, SKIPPED or FAILED and a concrete reason for **each** row. Restate incomplete
 phases and next steps beneath the table. Check actual observations, not intentions.
-The report helper validates these phase lists:
+The dashboard report helper validates these phase lists:
 
 - Create: preflight, intent, model, structure, initialize, metadata, expand, iterate.
 - Expand: preflight, intent, inventory, queries, gaps, author, test, iterate.
 - Iterate: preflight, context, browser, query-health, gemini, acceptance, report, merge-route.
 - Setup: preflight, dependencies, credentials, verification.
 - Doctor: preflight, diagnostics.
+
+Source-only ledger (reported directly, outside the dashboard report helper):
+repository, contract, sql, pipeline, local-validation, warehouse-validation,
+deployment, omni-exposure, resume. Source code ready, table deployed and Omni query
+ready are separate acceptance states; see [source authoring](data-source-authoring.md).
 
 If create never invokes expand, explicitly say expansion did not run, iteration
 was skipped, and no Gemini evaluation/report exists. If a handoff failed, its row

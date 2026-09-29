@@ -1,5 +1,15 @@
 # Create → expand → iterate handoff
 
+Create/expand may call `create-data-source` for an authorized data gap and receive
+its result before continuing. Add a `data_sources` record using
+[source authoring](data-source-authoring.md). Keep warehouse revision/SQL evidence
+separate from the dashboard digest and per-tile Omni evidence. Pending deployment
+or model exposure never becomes a backed question or a successful data-tile query.
+The source skill returns to its caller, preventing recursive phase invocation.
+Standalone source work may use a source-only handoff before any document exists.
+The dashboard envelope and digest/target checks below apply once a definition
+exists; do not require a provisioned dashboard to prepare warehouse source code.
+
 Use one private `handoff.json` outside the repository, beside the review session.
 Create its directory with mode 700 and file with mode 600. Each skill reads it on
 entry and updates it before invoking the next skill, including after a failure.

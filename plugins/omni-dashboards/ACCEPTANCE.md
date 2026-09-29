@@ -1,3 +1,23 @@
+# Data-source skill update, 2026-09-29
+
+Local plugin version 260929.0 adds `create-data-source` and routes authorized source
+gaps from the dashboard workflows. The reference is Evergreen PR #135308 at head
+`efa46fb27d922073b5ee719cc08e4f817338b931`: Snowflake transform, Airflow registration
+and upstream dependencies, plus data-team inventory/version updates.
+
+All 53 existing offline tests passed. Strict Claude plugin and marketplace manifest
+validation passed. All six skills passed YAML/frontmatter checks and the Codex
+skill validator on temporary copies omitting Claude's supported `argument-hint`
+field; source frontmatter preserves that field where present. Internal references
+were checked. These checks establish packaging and existing regression behavior,
+not an agent executing the new source-authoring workflow.
+
+No consuming-repository source was authored or deployed, warehouse queries run,
+Omni model/schema refreshed, dashboard published, or Gemini call made by this
+update. Source-authoring live acceptance, scheduled deployment and executed Omni
+acceptance queries remain separate pending gates. This record does not assert a
+marketplace push or installed-plugin refresh.
+
 # Release dependency update, 2026-09-21
 
 Plugin 260921.0 requires chart-room 1.10.2, commit ddf9e7d64866c7395c50901eb2e51e483ebc6a82.
