@@ -114,7 +114,7 @@ class TestContextMain:
         return json.dumps(data)
 
     def test_memories_found(self):
-        """When search returns memories, additionalContext is included."""
+        """SessionStart context uses the hook-specific output contract."""
         fake_results = {
             "results": [
                 {"id": "m1", "memory": "Uses TypeScript with strict mode"},
@@ -128,12 +128,13 @@ class TestContextMain:
         with patch.object(hooks, "_get_memory", return_value=mock_mem):
             result = _capture_output(hooks.context_main, self._make_stdin())
 
-        assert result["continue"] is True
-        assert result["suppressOutput"] is True
-        assert "additionalContext" in result
-        assert "TypeScript" in result["additionalContext"]
-        assert "pytest" in result["additionalContext"]
-        assert "# mem0 Cross-Session Memory" in result["additionalContext"]
+        assert "additionalContext" not in result
+        hook_output = result["hookSpecificOutput"]
+        assert hook_output["hookEventName"] == "SessionStart"
+        context = hook_output["additionalContext"]
+        assert "TypeScript" in context
+        assert "pytest" in context
+        assert "# mem0 Cross-Session Memory" in context
 
     def test_no_memories_omits_additional_context(self):
         """When no memories found, additionalContext is absent."""
@@ -165,7 +166,7 @@ class TestContextMain:
         with patch.object(hooks, "_get_memory", return_value=mock_mem):
             result = _capture_output(hooks.context_main, self._make_stdin())
 
-        ctx = result["additionalContext"]
+        ctx = result["hookSpecificOutput"]["additionalContext"]
         # m2 should appear only once
         assert ctx.count("fact two") == 1
         assert "fact one" in ctx
@@ -181,7 +182,8 @@ class TestContextMain:
         with patch.object(hooks, "_get_memory", return_value=mock_mem):
             result = _capture_output(hooks.context_main, self._make_stdin())
 
-        assert "plain list result" in result["additionalContext"]
+        context = result["hookSpecificOutput"]["additionalContext"]
+        assert "plain list result" in context
 
     def test_exception_returns_nonfatal(self):
         """Any exception produces a non-fatal response."""
@@ -199,7 +201,8 @@ class TestContextMain:
         with patch.object(hooks, "_get_memory", return_value=mock_mem):
             result = _capture_output(hooks.context_main, self._make_stdin())
 
-        lines = [l for l in result["additionalContext"].split("\n") if l and l[0].isdigit()]
+        context = result["hookSpecificOutput"]["additionalContext"]
+        lines = [l for l in context.split("\n") if l and l[0].isdigit()]
         assert len(lines) == hooks._MAX_MEMORIES
 
     def test_empty_cwd_uses_project_fallback(self):
@@ -215,7 +218,7 @@ class TestContextMain:
         # Verify search was called with 'project' fallback
         first_query = mock_mem.search.call_args_list[0].kwargs["query"]
         assert "project" in first_query
-        assert "additionalContext" in result
+        assert "additionalContext" in result["hookSpecificOutput"]
 
 
 # ---------------------------------------------------------------------------

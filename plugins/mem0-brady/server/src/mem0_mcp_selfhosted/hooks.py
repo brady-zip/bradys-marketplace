@@ -342,8 +342,8 @@ def _search_scoped(
 def _emit_additional_context(event_name: str, context: str) -> None:
     """Emit a hookSpecificOutput.additionalContext response for *event_name*.
 
-    This is the canonical shape for UserPromptSubmit / PreToolUse context
-    injection (matches Claude Code's documented hook output).
+    This is the canonical shape for SessionStart / UserPromptSubmit /
+    PreToolUse context injection.
     """
     _output({
         "hookSpecificOutput": {
@@ -392,9 +392,7 @@ def context_main() -> None:
             text = m.get("memory", m.get("text", ""))
             lines.append(f"{i}. {text}")
 
-        response = _nonfatal()
-        response["additionalContext"] = "\n".join(lines)
-        _output(response)
+        _emit_additional_context("SessionStart", "\n".join(lines))
 
     except Exception:
         logger.debug("context_main failed", exc_info=True)
