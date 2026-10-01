@@ -11,11 +11,13 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import subprocess
 import sys
 import tempfile
+import time
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
@@ -79,6 +81,12 @@ def _bool_env(name: str, default: bool) -> bool:
 # BOTH sides are small — these are floors for "did anything happen", not budgets.
 _MIN_USER_LEN = _int_env("MEM0_MIN_USER_LEN", 200)
 _MIN_ASSISTANT_LEN = _int_env("MEM0_MIN_ASSISTANT_LEN", 500)
+
+# Post-turn extraction is worthwhile only after a sufficiently long turn.
+# UserPromptSubmit starts the clock; Stop consumes it. PreCompact and handoff
+# synthesis have their own purpose and are not subject to this duration gate.
+# Zero restores capture without a turn-duration requirement.
+_CAPTURE_MIN_TURN_SECONDS = _int_env("MEM0_CAPTURE_MIN_TURN_SECONDS", 120)
 
 # Minimum seconds between two memory writes for the same cwd. The Stop hook
 # fires on EVERY assistant turn, so without this, capture volume scales with
@@ -818,6 +826,8 @@ def _capture_summary(
     project_name: str,
     source: str,
     cwd: str = "",
+    *,
+    capture_allowed: bool = True,
 ) -> Path | None:
     """Read the transcript, store a summary in mem0, and write a handoff file.
 
@@ -826,13 +836,15 @@ def _capture_summary(
     ``app_id``. Returns the handoff file path (for the caller's systemMessage)
     or None when nothing meaningful was captured / written.
 
-    The two outputs have different conditions. The memory write happens for
-    every session; the handoff only for a session tagged with a workstream.
+    The two outputs have different conditions. Memory writes are subject to
+    capture policy and the caller's duration gate; handoffs require a workstream.
     """
     # Nothing to produce — skip before reading a transcript that can reach
     # ~900 KB and before opening a client, so a host that wants neither pays
     # nothing per turn rather than doing the work and discarding it.
-    if not _CAPTURE_ENABLED and not _HANDOFF_ENABLED:
+    capture_enabled = _CAPTURE_ENABLED and capture_allowed
+    workstream = _active_workstream(session_id) if _HANDOFF_ENABLED or capture_enabled else None
+    if not capture_enabled and not (_HANDOFF_ENABLED and workstream):
         return None
 
     if not transcript_path or not Path(transcript_path).is_file():
@@ -888,7 +900,6 @@ def _capture_summary(
     # nothing could filter on; the documented claim that recall and /digest used
     # it was never true of an opaque payload field.
     agent_id = _get_agent_id()
-    workstream = _active_workstream(session_id)
     run_id = workstream["slug"] if workstream else None
 
     scopes: dict = {}
@@ -906,6 +917,8 @@ def _capture_summary(
     # overlapping transcript window.
     if not _CAPTURE_ENABLED:
         logger.debug("memory capture disabled by %s", _disabled_by("MEM0_CAPTURE_ENABLED"))
+    elif not capture_allowed:
+        logger.debug("memory capture skipped by turn-duration gate")
     elif _is_debounced(_last_capture_path(cwd, project_name), _CAPTURE_MIN_INTERVAL):
         logger.debug("memory capture debounced for %s", cwd)
     else:
@@ -924,7 +937,7 @@ def _capture_summary(
     # untagged session has no thread to resume into, so a handoff there bills a
     # synthesis completion per turn for a file whose only reader is a resume
     # that will never look for it. Passive capture above still runs for every
-    # session — that is the memory layer, and it is not gated on anything.
+    # session that meets capture policy, independently of workstream tagging.
     if not _HANDOFF_ENABLED:
         logger.debug(
             "handoff synthesis disabled by %s", _disabled_by("MEM0_HANDOFF_ENABLED")
@@ -942,6 +955,47 @@ def _capture_summary(
         logger.debug("handoff refresh debounced for %s", cwd)
         return None
     return _write_handoff(mem, recent, project_name, cwd, source, workstream)
+
+
+def _turn_timer_path(hook_input: dict) -> Path | None:
+    """Key by session and agent, never by transcript (Codex converts it)."""
+    session_id = hook_input.get("session_id")
+    if not session_id:
+        return None
+    key = json.dumps([session_id, _get_agent_id(), hook_input.get("cwd", "")])
+    digest = hashlib.sha256(key.encode()).hexdigest()
+    return Path(tempfile.gettempdir()) / f"mem0_turn_{digest}"
+
+
+def _start_turn_timer(hook_input: dict) -> None:
+    """Start even for tiny prompts; recall's length floor is unrelated."""
+    try:
+        marker = _turn_timer_path(hook_input)
+        if marker is not None:
+            marker.write_text(str(time.monotonic()), encoding="utf-8")
+    except OSError:
+        logger.debug("could not start turn timer", exc_info=True)
+
+
+def _turn_capture_allowed(hook_input: dict) -> bool:
+    """Consume the timer so duplicate Stops cannot capture an old turn."""
+    elapsed = None
+    try:
+        marker = _turn_timer_path(hook_input)
+        if marker is not None:
+            try:
+                started = float(marker.read_text(encoding="utf-8"))
+                elapsed = time.monotonic() - started
+            finally:
+                marker.unlink(missing_ok=True)
+    except (OSError, ValueError):
+        elapsed = None
+        logger.debug("turn timer unavailable; skipping post-turn extraction", exc_info=True)
+    return _CAPTURE_MIN_TURN_SECONDS == 0 or (
+        elapsed is not None
+        and math.isfinite(elapsed)
+        and elapsed > _CAPTURE_MIN_TURN_SECONDS
+    )
 
 
 def stop_main() -> None:
@@ -965,6 +1019,7 @@ def stop_main() -> None:
             project_name,
             "session-stop-hook",
             cwd,
+            capture_allowed=_turn_capture_allowed(hook_input),
         )
         resp = _nonfatal()
         if handoff:
@@ -1034,6 +1089,7 @@ def prompt_main() -> None:
     """
     try:
         hook_input = json.loads(sys.stdin.read())
+        _start_turn_timer(hook_input)
         prompt = hook_input.get("prompt", "") or ""
         if len(prompt) < _PROMPT_MIN_LEN:
             _output(_nonfatal())

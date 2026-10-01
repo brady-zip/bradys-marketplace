@@ -14,7 +14,8 @@ Mem0 does **both** kinds of memory here:
   in every session, for IPs / ports / versions / config values / ids / endpoints.
 - **Passive auto-recall** — on `SessionStart` (and `UserPromptSubmit` resume-intent, and `Read`
   file-context), relevant past memories are injected as context.
-- **Passive auto-capture** — on `Stop` and `PreCompact`, a session summary is written to memory.
+- **Passive auto-capture** — on `Stop` after turns longer than 120 seconds, and on
+  `PreCompact`, a session summary is written to memory, subject to capture policy.
 - **`grill-me` skill** — a Mem0-backed plan/design interview ("grill me") that stress-tests a
   design against prior decisions and persists resolved glossary terms + decisions to the store,
   `app_id`-scoped to the session's domain. (Folded in from the former standalone `grill-me` plugin.)
@@ -212,6 +213,20 @@ per-process lock** — it can't be shared by the MCP server, the hooks, concurre
 and the Hal gateway at once. The server handles concurrent access cleanly.
 
 ## Capture policy: which sessions write
+
+Post-turn (`Stop`) extraction requires a turn **longer than 120 seconds** by default,
+in both Claude Code and Codex. The timer starts on `UserPromptSubmit`, including short
+prompts, and is consumed at `Stop`; idle time between turns does not count. A missing or
+unreadable timer skips extraction. Override the threshold in `~/.config/mem0-brady/.env`:
+
+```sh
+MEM0_CAPTURE_MIN_TURN_SECONDS=120  # seconds; 0 disables the duration gate
+```
+
+At or below the threshold, extraction is skipped. Invalid or negative values fall back
+to 120. Existing capture switches, content floors, and the 900-second
+`MEM0_CAPTURE_MIN_INTERVAL` cooldown still apply to eligible turns. `PreCompact` capture
+and workstream handoff synthesis are independent of this timer.
 
 The Stop/PreCompact path produces two things, and they are switched independently:
 

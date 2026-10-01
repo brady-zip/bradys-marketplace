@@ -349,6 +349,7 @@ class TestStopMain:
         """
         monkeypatch.setenv("MEM0_HANDOFF_DIR", str(tmp_path / "handoffs"))
         monkeypatch.setenv("MEM0_WORKSTREAM_DIR", str(tmp_path / "workstreams"))
+        monkeypatch.setattr(hooks, "_CAPTURE_MIN_TURN_SECONDS", 0)
         monkeypatch.setattr(hooks, "_MIN_USER_LEN", 20)
         monkeypatch.setattr(hooks, "_MIN_ASSISTANT_LEN", 50)
 
@@ -652,6 +653,7 @@ class TestHandoffRequiresWorkstream:
         self.workstreams = tmp_path / "workstreams"
         monkeypatch.setenv("MEM0_HANDOFF_DIR", str(self.handoffs))
         monkeypatch.setenv("MEM0_WORKSTREAM_DIR", str(self.workstreams))
+        monkeypatch.setattr(hooks, "_CAPTURE_MIN_TURN_SECONDS", 0)
         monkeypatch.setattr(hooks, "_MIN_USER_LEN", 20)
         monkeypatch.setattr(hooks, "_MIN_ASSISTANT_LEN", 50)
 

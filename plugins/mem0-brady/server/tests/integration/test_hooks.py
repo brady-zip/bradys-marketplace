@@ -170,6 +170,11 @@ class TestContextMainIntegration:
 class TestStopMainIntegration:
     """Verify stop_main() saves session summaries to real mem0 via infer=True."""
 
+    @pytest.fixture(autouse=True)
+    def _disable_turn_gate(self, monkeypatch):
+        # These tests exercise the storage boundary without a prompt event.
+        monkeypatch.setattr(hooks, "_CAPTURE_MIN_TURN_SECONDS", 0)
+
     def test_saves_session_summary(self, hook_memory, tmp_path):
         """stop_main() extracts facts from transcript and stores them in mem0."""
         user_id = f"{HOOK_TEST_USER}-stop-{int(time.time())}"
