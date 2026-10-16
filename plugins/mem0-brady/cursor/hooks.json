@@ -10,7 +10,7 @@
     "beforeSubmitPrompt": [
       {
         "command": "./cursor/hook.py prompt",
-        "timeout": 20
+        "timeout": 50
       }
     ],
     "stop": [
@@ -42,9 +42,7 @@
         "command": "./cursor/hook.py filecontext",
         "timeout": 15,
         "matcher": "Read"
-      }
-    ],
-    "afterMCPExecution": [
+      },
       {
         "command": "./cursor/hook.py audit",
         "timeout": 12

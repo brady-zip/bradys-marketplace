@@ -1,6 +1,6 @@
 {
   "name": "mem0-brady",
-  "version": "261016.0",
+  "version": "261016.1",
   "description": "Shared Mem0 memory for Cursor, Claude Code, Codex, and Hal.",
   "author": {
     "name": "Brady Watkinson",

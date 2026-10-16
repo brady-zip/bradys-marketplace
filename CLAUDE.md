@@ -147,6 +147,10 @@ A self-hosted Mem0 memory backbone. Five layers that must stay consistent:
    `CURSOR_VERSION` is set and `MEM0_CURSOR_ADAPTER` is not, so Cursor importing
    the Claude manifest cannot capture a second time — and that no-op still
    prints an allow decision, because empty `preToolUse` stdout blocks the tool.
+   Cursor Cloud does not fire `sessionStart`, so the first `beforeSubmitPrompt`
+   runs the session scripts when the per-cwd session marker is not this
+   session. The operation log is on `postToolUse` because Cloud does not fire
+   `afterMCPExecution`.
 
 **Memory model — one store, four scopes.** `user_id` (whose store) / `app_id` (what the
 work is about) / `agent_id` (which agent wrote it) / `run_id` (which workstream).

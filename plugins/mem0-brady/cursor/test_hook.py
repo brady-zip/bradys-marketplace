@@ -1,3 +1,4 @@
+import hashlib
 import io
 import json
 import os
@@ -81,13 +82,62 @@ class CursorHookTest(unittest.TestCase):
         self.assertEqual(output, {"additional_context": "Scopes\n\nRemember this"})
 
     def test_prompt_keeps_submission_open_and_forwards_context(self) -> None:
-        with patch(
-            "hook.subprocess.run",
-            return_value=subprocess.CompletedProcess(
-                [],
+        cwd = os.getcwd()
+        with tempfile.TemporaryDirectory() as directory:
+            digest = hashlib.sha1(cwd.encode()).hexdigest()[:8]
+            (Path(directory) / f"{digest}.json").write_text(
+                json.dumps({"session_id": "conv-1", "cwd": cwd}),
+                encoding="utf-8",
+            )
+            with (
+                patch.dict(os.environ, {"MEM0_BRADY_SESSIONS_DIR": directory}),
+                patch(
+                    "hook.subprocess.run",
+                    return_value=subprocess.CompletedProcess(
+                        [],
+                        0,
+                        stdout='{"hookSpecificOutput":{"additionalContext":"Search first"}}',
+                    ),
+                ) as run,
+            ):
+                output = json.loads(
+                    hook.run_hook(
+                        "prompt",
+                        {
+                            "hook_event_name": "beforeSubmitPrompt",
+                            "prompt": "resume the mem0 work",
+                            "conversation_id": "conv-1",
+                            "cwd": cwd,
+                        },
+                    )
+                )
+        run.assert_called_once()
+        self.assertEqual(
+            output,
+            {"continue": True, "additional_context": "Search first"},
+        )
+
+    def test_prompt_runs_session_scripts_when_session_start_did_not(self) -> None:
+        calls: list[str] = []
+
+        def capture(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+            name = Path(command[-1]).name
+            calls.append(name)
+            text = {
+                "steer.sh": "Scopes",
+                "run-context.sh": "Remember this",
+                "run-prompt.sh": "Search first",
+            }[name]
+            return subprocess.CompletedProcess(
+                command,
                 0,
-                stdout='{"hookSpecificOutput":{"additionalContext":"Search first"}}',
-            ),
+                stdout=json.dumps({"additionalContext": text}),
+            )
+
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.dict(os.environ, {"MEM0_BRADY_SESSIONS_DIR": directory}),
+            patch("hook.subprocess.run", side_effect=capture),
         ):
             output = json.loads(
                 hook.run_hook(
@@ -100,9 +150,13 @@ class CursorHookTest(unittest.TestCase):
                     },
                 )
             )
+        self.assertEqual(calls, ["steer.sh", "run-context.sh", "run-prompt.sh"])
         self.assertEqual(
             output,
-            {"continue": True, "additional_context": "Search first"},
+            {
+                "continue": True,
+                "additional_context": "Scopes\n\nRemember this\n\nSearch first",
+            },
         )
 
     def test_stop_converts_transcript_and_does_not_follow_up(self) -> None:
@@ -318,7 +372,7 @@ class CursorHookTest(unittest.TestCase):
         manifest = json.loads(
             (hook.PLUGIN_ROOT / ".cursor-plugin/plugin.json").read_text()
         )
-        self.assertEqual(manifest["version"], "261016.0")
+        self.assertEqual(manifest["version"], "261016.1")
         configuration = json.loads((hook.PLUGIN_ROOT / manifest["hooks"]).read_text())
         self.assertEqual(configuration["version"], 1)
         registered = set()
@@ -326,9 +380,16 @@ class CursorHookTest(unittest.TestCase):
             for group in groups:
                 name = group["command"].rsplit(" ", 1)[1]
                 registered.add(name)
-                self.assertGreater(group["timeout"], hook.budget(name))
+                self.assertGreater(group["timeout"], hook.timeout_floor(name))
                 self.assertLessEqual(group["timeout"], 60)
         self.assertEqual(registered, set(hook.SCRIPTS))
+        self.assertNotIn("afterMCPExecution", configuration["hooks"])
+        audit = [
+            group["command"]
+            for group in configuration["hooks"]["postToolUse"]
+            if group["command"].endswith(" audit")
+        ]
+        self.assertEqual(audit, ["./cursor/hook.py audit"])
 
 
 if __name__ == "__main__":

@@ -12,6 +12,7 @@ response that lets the session continue, and never echoes the payload.
 """
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -77,6 +78,46 @@ TEXT_BLOCK_TYPES = {"text", "input_text", "output_text"}
 
 def budget(handler: str) -> int:
     return sum(timeout for _, timeout in SCRIPTS[handler])
+
+
+def timeout_floor(handler: str) -> int:
+    """The hooks.json timeout has to outlast every script this handler can run.
+
+    Cursor Cloud does not fire sessionStart. The first beforeSubmitPrompt runs
+    the session scripts when that event did not, so the prompt timeout has to
+    cover both.
+    """
+    total = budget(handler)
+    if handler == "prompt":
+        total += budget("session")
+    return total
+
+
+def sessions_dir() -> Path:
+    override = os.environ.get("MEM0_BRADY_SESSIONS_DIR", "").strip()
+    if override:
+        return Path(override)
+    xdg = os.environ.get("XDG_DATA_HOME", "").strip()
+    root = Path(xdg) if xdg else Path.home() / ".local" / "share"
+    return root / "mem0-brady" / "sessions"
+
+
+def cwd_session_marker_matches(session_id: str, cwd: str) -> bool:
+    """True when steer.sh already recorded this session for this checkout.
+
+    The path matches hooks/lib-recall-log.sh: sessions/<sha1(cwd)[:8]>.json.
+    The IDE's sessionStart writes it, so a later prompt does not recall twice.
+    Cloud never writes it until this prompt does.
+    """
+    if not session_id or not cwd:
+        return False
+    digest = hashlib.sha1(cwd.encode()).hexdigest()[:8]
+    path = sessions_dir() / f"{digest}.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return isinstance(data, dict) and data.get("session_id") == session_id
 
 
 def resolve_cwd(payload: dict[str, object]) -> str:
@@ -296,6 +337,13 @@ def run_hook(handler: str, payload: dict[str, object]) -> str:
         return json.dumps({"permission": "allow"})
     cwd = str(forwarded.get("cwd") or os.getcwd())
     environment = hook_environment(cwd)
+    script_plan = list(SCRIPTS[handler])
+    if handler == "prompt":
+        session_id = forwarded.get("session_id")
+        if isinstance(session_id, str) and session_id and not cwd_session_marker_matches(
+            session_id, cwd
+        ):
+            script_plan = [*SCRIPTS["session"], *script_plan]
 
     with tempfile.TemporaryDirectory(prefix="mem0-cursor-") as temp_dir:
         if handler in ("stop", "precompact"):
@@ -309,7 +357,7 @@ def run_hook(handler: str, payload: dict[str, object]) -> str:
                     convert_transcript(source, destination)
                 forwarded = {**forwarded, "transcript_path": str(converted)}
         outputs: list[str] = []
-        for script, timeout in SCRIPTS[handler]:
+        for script, timeout in script_plan:
             outputs.append(run_script(script, timeout, forwarded, environment))
 
     if handler == "session":
@@ -318,7 +366,8 @@ def run_hook(handler: str, payload: dict[str, object]) -> str:
         return json.dumps({"additional_context": text}) if text else ""
     if handler == "prompt":
         result: dict[str, object] = {"continue": True}
-        text = extract_context(outputs[0])
+        chunks = [extract_context(output) for output in outputs]
+        text = "\n\n".join(chunk for chunk in chunks if chunk)
         if text:
             result["additional_context"] = text
         return json.dumps(result)
