@@ -9,6 +9,11 @@
 
 set -uo pipefail
 
+# The Cursor double-run guard lives in lib-scope.sh. Sourcing it here does not
+# resolve scopes; this hook only needs the guard.
+# shellcheck source=lib-scope.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib-scope.sh"
+
 LOG_DIR="$HOME/.local/share/mem0-brady/logs"
 mkdir -p "$LOG_DIR" 2>/dev/null || exit 0
 

@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": "./cursor/hook.py session",
+        "timeout": 35
+      }
+    ],
+    "beforeSubmitPrompt": [
+      {
+        "command": "./cursor/hook.py prompt",
+        "timeout": 20
+      }
+    ],
+    "stop": [
+      {
+        "command": "./cursor/hook.py stop",
+        "timeout": 60
+      }
+    ],
+    "preCompact": [
+      {
+        "command": "./cursor/hook.py precompact",
+        "timeout": 60
+      }
+    ],
+    "preToolUse": [
+      {
+        "command": "./cursor/hook.py metadata",
+        "timeout": 12,
+        "matcher": "mcp__mem0__|mcp__claude_ai_mem0__|MCP:|add_memory|add_memories"
+      },
+      {
+        "command": "./cursor/hook.py blockwrite",
+        "timeout": 12,
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit|StrReplace"
+      }
+    ],
+    "postToolUse": [
+      {
+        "command": "./cursor/hook.py filecontext",
+        "timeout": 15,
+        "matcher": "Read"
+      }
+    ],
+    "afterMCPExecution": [
+      {
+        "command": "./cursor/hook.py audit",
+        "timeout": 12
+      }
+    ]
+  }
+}

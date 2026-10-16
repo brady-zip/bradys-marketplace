@@ -19,6 +19,7 @@ vendored Python MCP server under `plugins/mem0-brady/server/`.
 plugins/<name>/
   .claude-plugin/plugin.json        # plugin manifest
   .codex-plugin/plugin.json         # Codex's manifest — mem0-brady only
+  .cursor-plugin/plugin.json        # Cursor's manifest — mem0-brady only
   commands/*.md  skills/*/SKILL.md  hooks/hooks.json  scripts/  server/  README.md
 ```
 
@@ -30,15 +31,17 @@ two-line commit touching both files (see `98e6fa2`). Nothing validates this.
 Versions are date-based: `YYMMDD.N` (`260807.0` = 2026-08-07, first release that day).
 The vendored server has its own independent semver in `pyproject.toml`.
 
-`mem0-brady` is the exception that makes it three files: it also ships
-`plugins/mem0-brady/.codex-plugin/plugin.json`, the manifest Codex reads instead of the
-`.claude-plugin` one. Its `description` is deliberately its own short blurb, but its
-**`version` must match the other two** — Codex caches the plugin under
-`~/.codex/plugins/cache/<marketplace>/<plugin>/<version>/` and registers hook trust by
-that path, so a version that disagrees with `.claude-plugin/plugin.json` sends Codex
-looking for `codex/hook.py` under a directory the sync never wrote, and every hook then
-fails with exit 2 (a `PreToolUse` failing that way reads as "Blocked by hook"). Recover
-with `codex plugin list` against the marketplace, which re-materializes the cache.
+`mem0-brady` is the exception that makes it four files: it also ships
+`plugins/mem0-brady/.codex-plugin/plugin.json` and
+`plugins/mem0-brady/.cursor-plugin/plugin.json`, the manifests Codex and Cursor read
+instead of the `.claude-plugin` one. Their `description`s are deliberately their own
+short blurbs, but their **`version` must match `.claude-plugin/plugin.json`**. Codex
+caches the plugin under `~/.codex/plugins/cache/<marketplace>/<plugin>/<version>/` and
+registers hook trust by that path, so a version that disagrees sends Codex looking for
+`codex/hook.py` under a directory the sync never wrote, and every hook then fails with
+exit 2 (a `PreToolUse` failing that way reads as "Blocked by hook"). Cursor keys the
+same way. Recover with `codex plugin list` against the marketplace, which
+re-materializes the cache.
 
 Adding a plugin: create `plugins/<name>/` with its own `.claude-plugin/plugin.json`, then
 add a marketplace entry with `"source": "./plugins/<name>"`.
@@ -115,7 +118,7 @@ the module roles and the mem0ai-specific landmines (graph deletion bug, mutable
 
 ### `mem0-brady` — the largest and most involved
 
-A self-hosted Mem0 memory backbone. Four layers that must stay consistent:
+A self-hosted Mem0 memory backbone. Five layers that must stay consistent:
 
 1. **The vendored fork** (`server/`) — a `mem0ai`-based MCP server plus console-script
    hooks (`mem0-hook-context`, `mem0-hook-stop`, …) installed as a host tool by setup.
@@ -134,6 +137,16 @@ A self-hosted Mem0 memory backbone. Four layers that must stay consistent:
    memories stay distinguishable in one store. Codex's shell-based file reads emit no
    `Read` event, which is why `run-filecontext.sh` and `block-memory-write.sh` have no
    entry in `codex/hooks.json` — that asymmetry is expected, not an omission.
+5. **The Cursor adapter** (`cursor/`) — Cursor plugin hooks are a different schema
+   (`sessionStart`, `beforeSubmitPrompt`, `additional_context`, seconds not
+   milliseconds), so `cursor/hook.py` translates and then runs the same
+   `hooks/run-*.sh` scripts. `.cursor-plugin/plugin.json` points `hooks` at
+   `cursor/hooks.json`; leaving discovery on `hooks/hooks.json` would register
+   Claude's event names, which Cursor does not fire. Writes default to
+   `agent_id=cursor`. `hooks/lib-scope.sh` no-ops a Claude hook when
+   `CURSOR_VERSION` is set and `MEM0_CURSOR_ADAPTER` is not, so Cursor importing
+   the Claude manifest cannot capture a second time — and that no-op still
+   prints an allow decision, because empty `preToolUse` stdout blocks the tool.
 
 **Memory model — one store, four scopes.** `user_id` (whose store) / `app_id` (what the
 work is about) / `agent_id` (which agent wrote it) / `run_id` (which workstream).

@@ -1,0 +1,44 @@
+{
+  "name": "bradys-marketplace",
+  "owner": {
+    "name": "Brady Watkinson",
+    "email": "brady@local"
+  },
+  "metadata": {
+    "description": "B's personal plugin marketplace."
+  },
+  "plugins": [
+    {
+      "name": "mem0-brady",
+      "description": "B's personal self-hosted Mem0 backbone — the single memory store shared by Claude Code, Cursor, and Hal.",
+      "version": "261016.0",
+      "source": "plugins/mem0-brady",
+      "category": "productivity"
+    },
+    {
+      "name": "slack-bridge",
+      "source": "plugins/slack-bridge",
+      "version": "260626.0"
+    },
+    {
+      "name": "dark-factory",
+      "source": "plugins/dark-factory",
+      "version": "260723.0"
+    },
+    {
+      "name": "design-ops",
+      "source": "plugins/design-ops",
+      "version": "260804.0"
+    },
+    {
+      "name": "datadog-dashboards",
+      "source": "plugins/datadog-dashboards",
+      "version": "260916.0"
+    },
+    {
+      "name": "omni-dashboards",
+      "source": "plugins/omni-dashboards",
+      "version": "260929.0"
+    }
+  ]
+}

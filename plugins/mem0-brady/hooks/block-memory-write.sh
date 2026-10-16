@@ -10,6 +10,11 @@
 
 set -euo pipefail
 
+# The Cursor double-run guard lives in lib-scope.sh. Sourcing it here does not
+# resolve scopes; this hook only needs the guard.
+# shellcheck source=lib-scope.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib-scope.sh"
+
 input="$(cat)"
 tool_name="$(printf '%s' "$input" | jq -r '.tool_name // empty')"
 
