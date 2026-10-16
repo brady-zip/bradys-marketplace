@@ -1,7 +1,7 @@
 {
   "name": "mem0-brady",
-  "version": "260930.0",
-  "description": "Shared Mem0 memory for Codex, Claude Code, and Hal.",
+  "version": "261016.0",
+  "description": "Shared Mem0 memory for Codex, Claude Code, Cursor, and Hal.",
   "author": {
     "name": "Brady Watkinson"
   },

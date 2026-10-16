@@ -1,0 +1,12 @@
+{
+  "name": "mem0-brady",
+  "version": "261016.0",
+  "description": "Shared Mem0 memory for Cursor, Claude Code, Codex, and Hal.",
+  "author": {
+    "name": "Brady Watkinson",
+    "email": "brady@local"
+  },
+  "skills": "./skills/",
+  "commands": "./commands/",
+  "hooks": "./cursor/hooks.json"
+}

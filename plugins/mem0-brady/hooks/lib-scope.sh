@@ -31,6 +31,17 @@
 # Fails OPEN throughout: any error resolves to the plugin default rather than
 # breaking a session.
 
+# Cursor injects CURSOR_VERSION into hook processes only, not into a shell
+# launched from the IDE. cursor/hook.py exports MEM0_CURSOR_ADAPTER=1 before it
+# calls these scripts. Without that marker this is Cursor also importing the
+# Claude hooks.json, which would recall and capture a second time. A silent
+# exit is not safe here: Cursor treats empty preToolUse stdout as a schema
+# failure and blocks the tool.
+if [ -n "${CURSOR_VERSION:-}" ] && [ "${MEM0_CURSOR_ADAPTER:-}" != "1" ]; then
+  printf '%s\n' '{"continue":true,"permission":"allow","suppressOutput":true}'
+  exit 0
+fi
+
 # Layer 1 must be snapshotted BEFORE the machine .env is sourced. Sourcing runs
 # under `set -a`, so a value from the config file becomes an environment
 # variable indistinguishable from one the caller exported — without this

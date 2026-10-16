@@ -1,7 +1,7 @@
 # mem0-brady
 
 B's personal self-hosted [Mem0](https://github.com/mem0ai/mem0) backbone, packaged as a Claude
-Code plugin. It is the **single memory store shared by both Claude Code and Hal** — one
+Code plugin. It is the **single memory store shared by Claude Code, Cursor, and Hal** — one
 Qdrant, one namespace, so the two actors cross-query each other's memories.
 
 Which Qdrant and which namespace are **per-install**, chosen at setup and recorded in
@@ -93,6 +93,43 @@ Validate the adapter without writing memories:
 
 ```sh
 python3 -m unittest discover -s plugins/mem0-brady/codex -p 'test_*.py'
+```
+
+## Cursor with an existing Claude installation
+
+Cursor can use the same running MCP server, Qdrant collection, and user namespace.
+Keep `~/.config/mem0-brady/.env`. The MCP server is already registered in
+`~/.cursor/mcp.json` as `mem0`. What Cursor does not do is run
+`hooks/hooks.json`: those are Claude event names (`SessionStart`,
+`UserPromptSubmit`) with millisecond timeouts, and Cursor fires `sessionStart`,
+`beforeSubmitPrompt`, `stop`, `preCompact`, `preToolUse`, `postToolUse`, and
+`afterMCPExecution`, with timeouts in seconds.
+
+`cursor/hook.py` is the translation, registered from `.cursor-plugin/plugin.json`
+via `cursor/hooks.json`. It reuses the existing scope resolution, recall,
+capture, metadata guard, file-context recall, native file-memory block, and
+operation log. Writes default to `agent_id=cursor`. An explicit
+`MEM0_SCOPE_AGENT_ID` still takes precedence. Stop and PreCompact flatten
+Cursor's transcript (role on the envelope, text under `message.content`) into
+the `{role, content}` records the shared capture scripts read, then delete the
+temporary file.
+
+Cursor also imports Claude plugins when third-party config is enabled. Those
+imports would run `hooks/hooks.json` beside this adapter and capture twice.
+`hooks/lib-scope.sh` sees `CURSOR_VERSION` without `MEM0_CURSOR_ADAPTER` and
+returns an allow decision instead of running. The allow decision is required:
+empty `preToolUse` stdout is a schema failure, and Cursor blocks the tool.
+
+After this version is on `main`, update the marketplace in Cursor and start a
+new agent session. The Hooks tab should list the mem0 commands from
+`cursor/hooks.json`. Recall is injected as `additional_context` on session
+start and on each prompt. Capture runs on stop, for turns that clear the
+duration gate, and on compact.
+
+Validate the adapter without writing memories:
+
+```sh
+python3 -m unittest discover -s plugins/mem0-brady/cursor -p 'test_*.py'
 ```
 
 ## Stacks: managed, compose, external
