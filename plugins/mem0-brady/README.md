@@ -102,8 +102,11 @@ Keep `~/.config/mem0-brady/.env`. The MCP server is already registered in
 `~/.cursor/mcp.json` as `mem0`. What Cursor does not do is run
 `hooks/hooks.json`: those are Claude event names (`SessionStart`,
 `UserPromptSubmit`) with millisecond timeouts, and Cursor fires `sessionStart`,
-`beforeSubmitPrompt`, `stop`, `preCompact`, `preToolUse`, `postToolUse`, and
-`afterMCPExecution`, with timeouts in seconds.
+`beforeSubmitPrompt`, `stop`, `preCompact`, `preToolUse`, and `postToolUse`,
+with timeouts in seconds. Cursor Cloud does not fire `sessionStart` or
+`afterMCPExecution` and does not load `~/.cursor/hooks.json`, so the operation
+log is on `postToolUse` and the first `beforeSubmitPrompt` runs the session
+scripts when `sessionStart` did not write this checkout's session marker.
 
 `cursor/hook.py` is the translation, registered from `.cursor-plugin/plugin.json`
 via `cursor/hooks.json`. It reuses the existing scope resolution, recall,

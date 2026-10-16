@@ -11,7 +11,7 @@
     {
       "name": "mem0-brady",
       "description": "B's personal self-hosted Mem0 backbone — the single memory store shared by Claude Code, Cursor, and Hal.",
-      "version": "261016.0",
+      "version": "261016.1",
       "source": "plugins/mem0-brady",
       "category": "productivity"
     },
