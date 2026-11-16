@@ -2,8 +2,13 @@
 #
 # Setup check for the datadog-dashboards plugin.
 #
-# This is a thin wrapper around preflight.sh, kept because the README and the
-# plugin's docs have always pointed people here. The two used to be separate
+# This is a thin wrapper around preflight.sh, and the backend of the
+# /datadog-dashboards:doctor skill -- the way to run the preflight directly,
+# without starting a dashboard skill. The doctor's inline block calls this file
+# with no arguments, so the read-only, every-skill, full-report defaults below
+# are the doctor's defaults; change them here and you have changed it too.
+#
+# The two scripts used to be separate
 # implementations of the same checks, which is exactly the arrangement that lets
 # them drift: preflight would learn about a new dependency and this file would
 # quietly keep reporting a green machine. There is now one implementation.

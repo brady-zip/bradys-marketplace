@@ -77,7 +77,7 @@ python3 -m pytest tests/ -m "not integration" -v
 python3 -m pytest tests/unit/test_auth.py::TestIsOatToken::test_oat_token_detected -v
 
 # Each user-facing plugin ships its own health check
-bash plugins/<name>/scripts/check-setup.sh        # slack-bridge, dark-factory
+bash plugins/<name>/scripts/check-setup.sh        # slack-bridge, dark-factory, datadog-dashboards (or /datadog-dashboards:doctor)
 bash plugins/mem0-brady/scripts/doctor.sh         # or /mem0-brady:doctor
 ```
 

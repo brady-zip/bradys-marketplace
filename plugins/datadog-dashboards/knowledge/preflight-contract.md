@@ -1,7 +1,9 @@
 # Preflight and Completion Contract
 
-Every skill in this plugin (`create-dashboard`, `expand-dashboard`, `iterate-dashboard`)
-obeys the two rules below. They come from one real run that failed in two unrelated ways,
+Every dashboard skill in this plugin (`create-dashboard`, `expand-dashboard`,
+`iterate-dashboard`) obeys the two rules below. The fourth skill, `doctor`, runs the same
+preflight in a different posture — see [The doctor](#the-doctor--the-same-check-run-directly)
+at the end. They come from one real run that failed in two unrelated ways,
 neither of which ever reached the user — they found out by looking at the result.
 
 **Failure A — a diagnostic that was confidently wrong.** The old setup check probed
@@ -144,3 +146,31 @@ you actually did. Do not reconstruct it from memory of what you intended to do.
 If any row is `SKIPPED` or `FAILED`, restate those rows in prose beneath the table so
 they are visible to someone who skims past a markdown table, and say what the user should
 do about each.
+
+## The doctor — the same check, run directly
+
+`/datadog-dashboards:doctor` exists so that the preflight can be run without starting a
+dashboard skill: before a first run, or after a skill stopped on `BLOCKED` and the user has
+applied a fix and wants to know whether it took. It is not a second implementation. Its
+inline block runs `scripts/check-setup.sh`, which is `preflight.sh --skill all --smoke
+--no-repair`, so a probe fixed in `preflight.sh` is fixed in both places at once.
+
+It bends Rule 1 in three places, each on purpose:
+
+- **It does not repair unless asked.** A user who asks "what's wrong with my machine?" has
+  not asked for anything to be installed on it. `/datadog-dashboards:doctor repair` opts in,
+  and every `REPAIRED` line is reported back, as in any skill.
+- **`BLOCKED` does not stop it.** Under `--skill all` every problem any skill would hit is a
+  blocker, and each one names the skills that need it (`needed by: …`). The doctor's job is
+  to finish the report and say which entry points are still runnable — `create-dashboard`
+  needs neither Gemini nor Chrome Beta, so a doctor that answered "blocked" without saying
+  that would be as unhelpful as one that stayed quiet.
+- **It prints the full report, not `--brief`.** The lines `--brief` elides are the passing
+  checks, and on an explicit diagnostic those carry the resolved paths that tell one `uv`
+  from another — the evidence Failure A needed and never had.
+
+The rest still holds. A probe that cannot tell reports "could not tell", and the doctor
+relays it that way. The doctor never overrides a result with its own judgement. And it ends
+with a Rule 2 ledger, in which `Diagnose` is `DONE` whenever a report came back, even when
+that report is BLOCKED — the machine's health goes in Notes, the skill's own completeness
+in Status.

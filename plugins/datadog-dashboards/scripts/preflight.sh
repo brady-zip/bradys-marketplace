@@ -4,9 +4,10 @@
 #
 # WHY THIS EXISTS
 # ---------------
-# check-setup.sh is a *diagnostic* the user runs when something already broke.
-# This script is the *gate* every skill runs before it does any work, on every
-# invocation.
+# check-setup.sh is a *diagnostic* the user runs when something already broke --
+# usually through the /datadog-dashboards:doctor skill, which is its front door.
+# This script is the *gate* every dashboard skill runs before it does any work,
+# on every invocation.
 #
 # It exists because the old diagnostic gave a confident wrong answer. Its probe
 # was:
@@ -238,10 +239,16 @@ deferred() {
 
 # Report a failure as BLOCKED or DEFERRED depending on whether the skill that is
 # about to run actually needs it. $1 = comma-separated skills that need it.
+#
+# Every report says who needs it, blocked or not. Under `all` (the doctor's
+# scope) everything blocks, and without the suffix "Chrome Beta is not running"
+# and "chart-room is missing" read the same -- though the first leaves create
+# and expand runnable and the second stops all three. In a single-skill run it
+# tells the user which *other* skills the same fix unblocks.
 needed_by() {
   local needers="$1" msg="$2" fix="${3:-}"
   if [ "$SKILL" = "all" ] || printf '%s' ",$needers," | grep -q ",$SKILL,"; then
-    blocked "$msg" "$fix"
+    blocked "$msg (needed by: $needers)" "$fix"
   else
     deferred "$msg (needed by: $needers)" "$fix"
   fi
@@ -487,6 +494,14 @@ if [ "$SMOKE" = 1 ] && [ -n "$LLM_BIN" ] && [ "$N_BLOCKED" -eq 0 ]; then
     needed_by "iterate" "Gemini call failed: $(printf '%s' "$SMOKE_OUT" | head -2 | tr '\n' ' ')" \
       "llm keys set gemini   (a rejected key is the usual cause; also check ALL_PROXY)"
   fi
+elif [ "$SMOKE" = 1 ]; then
+  # Skipped, not passed. Everything checked before this point is on the Gemini
+  # path, so a live call would only fail for a reason already reported -- but
+  # skipping it without a word let a report with no "Gemini live call" section
+  # read as though the call had run. Say so. A note, not a deferral: the
+  # blocker that caused it is already counted.
+  print_header "Gemini live call"
+  note "NOT RUN -- a check above is already blocked. Fix it and re-run; until then the live call is unverified."
 fi
 
 # --- chart-room ---------------------------------------------------------------
@@ -741,7 +756,15 @@ fi
 if [ "$N_BLOCKED" -gt 0 ]; then
   printf "${RED}${BOLD}USER ACTION REQUIRED -- cannot proceed:${NC}\n"
   printf '%b' "$BLOCKERS"
-  printf "${RED}These need a human. Run the fixes above, then re-run preflight.${NC}\n"
+  # Which re-check to suggest depends on who ran this. Under `all` it is the
+  # doctor or check-setup.sh -- possibly in a plain terminal, where a slash
+  # command means nothing. Otherwise a skill's Phase 0 ran it, and re-running
+  # that skill is the cheaper re-check (the doctor always makes a Gemini call).
+  if [ "$SKILL" = "all" ]; then
+    printf "${RED}These need a human. Run the fixes above, then re-run this check (/datadog-dashboards:doctor, or scripts/check-setup.sh outside Claude Code).${NC}\n"
+  else
+    printf "${RED}These need a human. Run the fixes above, then re-run the skill -- its Phase 0 re-checks. /datadog-dashboards:doctor checks every skill at once.${NC}\n"
+  fi
   printf '\n'
 else
   printf "${GREEN}Preflight passed for skill '%s'.${NC}\n" "$SKILL"

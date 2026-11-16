@@ -26,8 +26,8 @@ claude plugin install datadog-dashboards@bradys-marketplace
 
 </details>
 
-You do not have to run a setup step. **Every skill runs `scripts/preflight.sh` as its
-Phase 0, on every invocation**, and repairs what it can before doing any work.
+You do not have to run a setup step. **Every dashboard skill runs `scripts/preflight.sh`
+as its Phase 0, on every invocation**, and repairs what it can before doing any work.
 
 It is not an instruction the model has to remember — each SKILL.md carries it as an inline
 bash block, which Claude Code executes on invocation and injects into context:
@@ -42,17 +42,28 @@ instruction that gets skipped. `--brief` keeps a healthy machine to two lines of
 invocation, which would replace a useful "here's what to install" report with a bare
 "shell command failed".
 
-To inspect your machine yourself without changing anything:
+To run the preflight yourself, without starting a dashboard skill and without changing
+anything:
 
-> run the datadog-dashboards check-setup script
+```
+/datadog-dashboards:doctor            # diagnose only
+/datadog-dashboards:doctor repair     # also install what it can, and tell you what it installed
+```
 
-Both paths share one implementation (`scripts/preflight.sh`); they differ only in posture.
+The doctor runs `scripts/check-setup.sh`, which is `preflight.sh` with different flags. Both
+paths share one implementation; they differ only in posture.
 
-| | `preflight.sh` | `check-setup.sh` |
+| | Phase 0 of each dashboard skill | `/datadog-dashboards:doctor` |
 |---|---|---|
+| Runs | `preflight.sh --skill <create\|expand\|iterate> --brief` | `check-setup.sh` → `preflight.sh --skill all --smoke --no-repair` |
 | When | automatically, at the top of every skill invocation | when you ask |
-| Scope | just what the skill about to run needs (`--skill create\|expand\|iterate`) | everything, for every skill |
-| Missing dependency | installs it if it can, otherwise stops the skill | reports it, never installs |
+| Scope | just what the skill about to run needs | everything, for every skill — each blocker says which skills it stops |
+| Output | two lines on a healthy machine; full detail on anything else | the full report, including the passing checks' versions and resolved paths |
+| Missing dependency | installs it if it can, otherwise stops the skill | reports it; installs only with `repair` |
+| Cost | one Datadog key validation; a live Gemini call for `iterate` only | one Datadog key validation and one live Gemini call (billable, tiny) per run — `repair` is a second run. The Gemini call is reported `NOT RUN` if a check before it already blocked |
+
+The doctor's full report is deliberate: the passing lines say *which* `uv` and *which*
+`llm` were found, and that is what diagnoses a PATH race — the failure described below.
 
 ### What is checked
 
@@ -191,6 +202,7 @@ flowchart TD
 | `create-dashboard` | Starting from scratch | `.dash.json` with `_meta` + section skeleton |
 | `expand-dashboard` | Existing dashboard missing metrics or sections | New widgets backed by instrumented metrics |
 | `iterate-dashboard` | Existing dashboard needs visual refinement | Polished `.dash.json` rated 7+/10 by Gemini |
+| `doctor` | Before a run, or after a skill stopped on `PREFLIGHT_STATUS: BLOCKED` | Per-area health table, which dashboard skills are ready, and the fix for each blocker |
 
 ### Agent
 
@@ -241,9 +253,11 @@ Each skill produces a `.dash.json` file (note: `.dash.json`, not `.dashboard.jso
 
 ## Troubleshooting
 
-Run `bash scripts/check-setup.sh` first — it reports every dependency without touching
-your machine. Add `--repair` to let it fix what it can, or just invoke any skill, whose
-Phase 0 repairs automatically.
+Run `/datadog-dashboards:doctor` first — it reports every dependency without touching
+your machine, and says which dashboard skills each problem blocks. Run
+`/datadog-dashboards:doctor repair` to let it fix what it can, or just invoke any dashboard
+skill, whose Phase 0 repairs automatically. Outside Claude Code, the same report is
+`bash scripts/check-setup.sh` (add `--repair` to fix).
 
 The failures it cannot fix for you:
 
